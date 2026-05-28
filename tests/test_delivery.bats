@@ -203,17 +203,35 @@ settings_file() {
 # --- stop subcommand ---
 
 @test "delivery stop: kills watchers and emits stop directive" {
-  # Spawn a real subprocess to act as the watcher; record its pid.
-  mkdir -p "$TEST_SKILL_DIR/run"
-  sleep 30 &
-  local sleep_pid=$!
-  echo "$sleep_pid" > "$TEST_SKILL_DIR/run/watch.fake-sess.pid"
+  # Spawn an actual watch.sh process so the safety check (argv contains
+  # watch.sh) passes.
+  mkdir -p "$TEST_SKILL_DIR/teams/myteam"
+  cat > "$TEST_SKILL_DIR/teams/myteam/config.json" <<JSON
+{"name":"myteam","agents":{"alice":{"registrations":[{"type":"claude-code","project":"$TEST_PROJECT"}]}}}
+JSON
+  AGMSG_WATCH_INTERVAL=10 bash "$SCRIPTS/watch.sh" stop-test "$TEST_PROJECT" claude-code &
+  local watch_pid=$!
+  sleep 1
+  [ -f "$TEST_SKILL_DIR/run/watch.stop-test.pid" ]
   run bash "$SCRIPTS/delivery.sh" stop
   [[ "$output" =~ "Killed 1 watch" ]]
   [[ "$output" =~ "AGMSG-DIRECTIVE" ]]
-  [ ! -f "$TEST_SKILL_DIR/run/watch.fake-sess.pid" ]
-  # And the sleep process should be dead.
-  ! kill -0 "$sleep_pid" 2>/dev/null
+  [ ! -f "$TEST_SKILL_DIR/run/watch.stop-test.pid" ]
+  sleep 1
+  ! kill -0 "$watch_pid" 2>/dev/null
+}
+
+@test "delivery stop: skips pid whose command line is not watch.sh (pid recycling safety)" {
+  mkdir -p "$TEST_SKILL_DIR/run"
+  sleep 30 &
+  local unrelated_pid=$!
+  echo "$unrelated_pid" > "$TEST_SKILL_DIR/run/watch.stale-sess.pid"
+  run bash "$SCRIPTS/delivery.sh" stop
+  [[ "$output" =~ "Killed 0 watch" ]]
+  [ ! -f "$TEST_SKILL_DIR/run/watch.stale-sess.pid" ]
+  # The unrelated sleep process must still be alive.
+  kill -0 "$unrelated_pid" 2>/dev/null
+  kill "$unrelated_pid" 2>/dev/null || true
 }
 
 # --- restart subcommand ---
@@ -550,4 +568,31 @@ JSON
   kill -0 "$untracked_pid" 2>/dev/null
   [ -f "$TEST_SKILL_DIR/run/watch.untracked-sid.pid" ]
   kill "$untracked_pid" 2>/dev/null || true
+}
+
+@test "session-start.sh does NOT kill a watcher when its session_id is still live under a different CC pid" {
+  mkdir -p "$TEST_SKILL_DIR/teams/myteam"
+  cat > "$TEST_SKILL_DIR/teams/myteam/config.json" <<JSON
+{"name":"myteam","agents":{"alice":{"registrations":[{"type":"claude-code","project":"$TEST_PROJECT"}]}}}
+JSON
+  bash "$SCRIPTS/delivery.sh" set monitor claude-code "$TEST_PROJECT" >/dev/null
+  mkdir -p "$TEST_SKILL_DIR/run"
+
+  # The session moved from one CC pid to another (claude --continue / resume).
+  # cc-instance.<dead> still references the same session_id as
+  # cc-instance.<live>. The watcher must NOT be killed.
+  sleep 30 &
+  local watcher_pid=$!
+  echo "$watcher_pid" > "$TEST_SKILL_DIR/run/watch.shared-sid.pid"
+  local dead_cc=999999
+  echo "shared-sid" > "$TEST_SKILL_DIR/run/cc-instance.$dead_cc"
+  echo "shared-sid" > "$TEST_SKILL_DIR/run/cc-instance.$$"
+
+  echo "{\"session_id\":\"x\"}" \
+    | bash "$SCRIPTS/session-start.sh" claude-code "$TEST_PROJECT" >/dev/null
+
+  kill -0 "$watcher_pid" 2>/dev/null
+  [ -f "$TEST_SKILL_DIR/run/watch.shared-sid.pid" ]
+  [ ! -f "$TEST_SKILL_DIR/run/cc-instance.$dead_cc" ]
+  kill "$watcher_pid" 2>/dev/null || true
 }

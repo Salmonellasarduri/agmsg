@@ -78,23 +78,46 @@ CC_PID=$(find_cc_pid 2>/dev/null || true)
 
 # --- Cleanup of stale cc-instance files and their orphan watchers. ---
 # A cc-instance.<pid> whose CC pid is dead is left over from a previous CC.
-# Before removing it, kill the watcher bound to its last session_id — that
-# watcher would otherwise linger if the CC crashed without propagating
-# signals (force-quit, OOM, etc.). Only kills watchers we have explicit
-# evidence for (dead CC → known last session_id), so a manually-invoked
-# Monitor whose CC is alive but never wrote a cc-instance is left alone.
+# Before removing it, optionally kill the watcher bound to its last
+# session_id — but only if that session_id isn't still referenced by a
+# LIVE cc-instance file. The same session_id can move from one CC pid to
+# another (e.g. on `claude --continue` / `--resume`), so a dead-pid record
+# alone is not evidence the session is gone.
+
+# First pass: collect session_ids that are still referenced by a LIVE CC.
+live_sids=""
+for f in "$RUN_DIR"/cc-instance.*; do
+  [ -f "$f" ] || continue
+  pid=${f##*.}
+  case "$pid" in ''|*[!0-9]*) continue ;; esac
+  if kill -0 "$pid" 2>/dev/null; then
+    s=$(cat "$f" 2>/dev/null || true)
+    [ -n "$s" ] && live_sids="$live_sids|$s"
+  fi
+done
+
+# Second pass: clean each dead cc-instance, killing its bound watcher only
+# when no live CC still references that session_id.
 for f in "$RUN_DIR"/cc-instance.*; do
   [ -f "$f" ] || continue
   pid=${f##*.}
   case "$pid" in ''|*[!0-9]*) continue ;; esac
   kill -0 "$pid" 2>/dev/null && continue
   dead_sid=$(cat "$f" 2>/dev/null || true)
-  if [ -n "$dead_sid" ]; then
+  if [ -n "$dead_sid" ] \
+      && ! printf '%s\n' "$live_sids" | tr '|' '\n' | grep -Fxq "$dead_sid"; then
     orphan_pidfile="$RUN_DIR/watch.$dead_sid.pid"
     if [ -f "$orphan_pidfile" ]; then
       orphan_pid=$(cat "$orphan_pidfile" 2>/dev/null || true)
       if [ -n "$orphan_pid" ] && kill -0 "$orphan_pid" 2>/dev/null; then
-        kill "$orphan_pid" 2>/dev/null || true
+        # Defensive: only kill if the pid's command line actually matches
+        # our watch.sh. Defends against pid recycling — a stale pidfile
+        # could point at an unrelated process that took the same pid.
+        cmd=$(ps -o args= -p "$orphan_pid" 2>/dev/null || true)
+        case "$cmd" in
+          *"$SKILL_DIR/scripts/watch.sh"*) kill "$orphan_pid" 2>/dev/null || true ;;
+          *) ;;  # not our watcher anymore; leave it alone
+        esac
       fi
       rm -f "$orphan_pidfile"
     fi
