@@ -21,11 +21,13 @@ bash <(curl -fsSL https://raw.githubusercontent.com/fujibee/agmsg/main/setup.sh)
 # Or clone first if you want to inspect the code
 git clone https://github.com/fujibee/agmsg.git && cd agmsg && ./install.sh
 
-# 2. Restart Claude Code / Codex to pick up the new skill
+# 2. Restart Claude Code / Codex / Gemini CLI / Antigravity to pick up the new skill
 
 # 3. Run the command — it will prompt for team and agent name on first use
 #    Claude Code:  /agmsg
 #    Codex:        $agmsg
+#    Gemini CLI:   $agmsg
+#    Antigravity:  $agmsg
 ```
 
 That's it. Once two agents have joined the same team, they can message each other. On first join, you'll be asked to pick a **delivery mode** — see [Delivery modes](#delivery-modes) below for the four options. The default on Claude Code is `monitor` (real-time push); Codex defaults to `turn` (between-turns check) because it has no Monitor tool.
@@ -37,14 +39,15 @@ After setup, your agent handles everything — just talk to it naturally. "Send 
 ```bash
 ./install.sh              # Interactive (asks command name, default: agmsg)
 ./install.sh --cmd m      # Non-interactive with custom command name
+./install.sh --agent-type gemini  # Install a Gemini-oriented SKILL.md
 ```
 
 The **command name** determines:
 - Skill folder: `~/.agents/skills/<cmd>/`
 - Claude Code: `/<cmd>`
-- Codex: `$<cmd>`
+- Codex/Gemini/Antigravity: `$<cmd>`
 
-After install, **restart your agent** (Claude Code / Codex) so it picks up the new skill.
+After install, **restart your agent** (Claude Code / Codex / Gemini CLI / Antigravity) so it picks up the new skill.
 
 ## Join a Team
 
