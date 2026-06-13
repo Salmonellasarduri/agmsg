@@ -28,8 +28,10 @@ set -euo pipefail
 #   --split h|v        tmux split direction when splitting the current window
 #                      (h = left/right [default], v = top/bottom)
 #   --terminal <tmpl>  terminal command template for the non-tmux path; a
-#                      `{cmd}` placeholder is replaced with the launch command.
-#                      Overrides $AGMSG_TERMINAL and config `spawn.terminal`.
+#                      `{cmd}` placeholder is replaced with the path to the
+#                      generated boot script (an executable file the terminal
+#                      should run). Overrides $AGMSG_TERMINAL and config
+#                      `spawn.terminal`.
 #
 # Scope note: claude-code/codex only; macOS is the primary target, Linux and
 # Windows are best-effort (no guarantee — please open an issue/PR if a given
@@ -167,16 +169,41 @@ esac
 # --- Pre-join so the child's actas just claims (no interactive team prompt) ---
 "$SCRIPT_DIR/join.sh" "$TEAM" "$NAME" "$AGENT_TYPE" "$PROJECT" >/dev/null
 
-# --- Build the launch command ---
+# --- Build the boot script the new agent will run ---
+# Rather than embed a multiply-escaped command string into each platform's
+# terminal invocation, write the launch steps into a temp executable script
+# and have every launcher simply *run that file*. This keeps quoting sane
+# across tmux, macOS, Linux emulators, Windows Terminal, and custom templates,
+# and on macOS it lets us use `open -a` (a plain app launch) instead of
+# `osascript ... do script`, which goes through AppleEvents and triggers the
+# Automation (TCC) permission prompts users otherwise have to approve.
+#
 # The agent CLIs accept an initial prompt as a positional argument and submit
 # it as the session's first message; passing the slash command makes the new
 # agent run `/agmsg actas <name>` on boot. We cd into the project first so a
-# cross-project spawn lands in the right tree.
+# cross-project spawn lands in the right tree, and drop into an interactive
+# shell afterwards so the window/pane stays open with the agent's final output.
 ACTAS_PROMPT="/agmsg actas ${NAME}"
-LAUNCH="cd $(printf '%q' "$PROJECT") && ${CLI_BIN} $(printf '%q' "$ACTAS_PROMPT")"
+
+BOOT_DIR="${TMPDIR:-/tmp}/agmsg-spawn"
+mkdir -p "$BOOT_DIR" 2>/dev/null || true
+# Best-effort GC of boot scripts left behind by spawns whose window was closed
+# before the script could remove itself (see the trailing rm below).
+find "$BOOT_DIR" -name 'boot-*.command' -type f -mtime +1 -delete 2>/dev/null || true
+BOOT="$(mktemp "$BOOT_DIR/boot-XXXXXX")"
+mv "$BOOT" "$BOOT.command"   # .command so macOS `open` runs it in Terminal
+BOOT="$BOOT.command"
+{
+  echo '#!/usr/bin/env bash'
+  printf 'cd %q || exit 1\n' "$PROJECT"
+  printf '%q %q\n' "$CLI_BIN" "$ACTAS_PROMPT"
+  echo 'rm -f "$0" 2>/dev/null'   # self-clean once the agent exits
+  echo 'exec "${SHELL:-/bin/bash}" -i'
+} > "$BOOT"
+chmod +x "$BOOT"
 
 # ============================================================================
-# Placement
+# Placement — every launcher just runs $BOOT.
 # ============================================================================
 
 launch_in_tmux() {
@@ -190,53 +217,32 @@ launch_in_tmux() {
   command -v tmux >/dev/null 2>&1 \
     || die "\$TMUX is set but the tmux binary is not on PATH; add it to PATH, or run outside tmux to use the OS-terminal path"
 
-  # Run the launch command in a fresh shell so $(printf %q) escaping holds,
-  # regardless of tmux's default-command shell.
-  local run="bash -lc $(printf '%q' "$LAUNCH")"
   if [ "$TMUX_TARGET" = "window" ]; then
-    tmux new-window -c "$PROJECT" "$run"
+    tmux new-window -c "$PROJECT" "$BOOT"
   else
     local dir="-h"; [ "$SPLIT" = "v" ] && dir="-v"
-    tmux split-window "$dir" -c "$PROJECT" "$run"
+    tmux split-window "$dir" -c "$PROJECT" "$BOOT"
   fi
 }
 
-# Escape a string for embedding inside an AppleScript double-quoted literal.
-applescript_quote() {
-  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
-}
-
 launch_macos_terminal() {
+  # `open -a` is a launch, not an AppleEvent, so it does not trip the
+  # Automation (TCC) consent prompts that `osascript ... do script` does.
   local app="${1:-Terminal}"
-  local esc; esc="$(applescript_quote "$LAUNCH")"
   case "$app" in
-    iterm|iterm2|iTerm|iTerm2)
-      osascript \
-        -e 'tell application "iTerm"' \
-        -e '  create window with default profile' \
-        -e "  tell current session of current window to write text \"$esc\"" \
-        -e '  activate' \
-        -e 'end tell' >/dev/null
-      ;;
-    *)
-      osascript \
-        -e "tell application \"Terminal\" to do script \"$esc\"" \
-        -e 'tell application "Terminal" to activate' >/dev/null
-      ;;
+    iterm|iterm2|iTerm|iTerm2) open -a iTerm "$BOOT" ;;
+    *)                         open -a Terminal "$BOOT" ;;
   esac
 }
 
 launch_linux_terminal() {
-  # Keep the window open after the agent exits so the operator can see final
-  # output; `exec bash` drops to an interactive shell in the project dir.
-  local run="bash -lc $(printf '%q' "$LAUNCH; exec bash")"
   local term
   for term in x-terminal-emulator gnome-terminal konsole xfce4-terminal xterm; do
     command -v "$term" >/dev/null 2>&1 || continue
     case "$term" in
-      gnome-terminal) gnome-terminal --working-directory="$PROJECT" -- bash -lc "$LAUNCH; exec bash" ;;
-      konsole)        konsole --workdir "$PROJECT" -e bash -lc "$LAUNCH; exec bash" ;;
-      *)              "$term" -e bash -lc "$LAUNCH; exec bash" ;;
+      gnome-terminal) gnome-terminal --working-directory="$PROJECT" -- "$BOOT" ;;
+      konsole)        konsole --workdir "$PROJECT" -e "$BOOT" ;;
+      *)              "$term" -e "$BOOT" ;;
     esac
     return 0
   done
@@ -245,25 +251,26 @@ launch_linux_terminal() {
 
 launch_windows_terminal() {
   if command -v wt.exe >/dev/null 2>&1; then
-    wt.exe new-tab bash -lc "$LAUNCH"
+    wt.exe new-tab bash -l "$BOOT"
     return 0
   fi
   if command -v wt >/dev/null 2>&1; then
-    wt new-tab bash -lc "$LAUNCH"
+    wt new-tab bash -l "$BOOT"
     return 0
   fi
   die "Windows Terminal (wt) not found; set AGMSG_TERMINAL or run inside tmux"
 }
 
 launch_with_template() {
-  # User-supplied terminal command. Substitute {cmd} with a self-contained
-  # launch invocation; if there is no placeholder, append it.
-  local inner; inner="bash -lc $(printf '%q' "$LAUNCH")"
+  # User-supplied terminal command. `{cmd}` is replaced with the path to the
+  # boot script (an executable file); if there is no placeholder, the path is
+  # appended. Quote it so a TMPDIR with spaces still works.
+  local q_boot; q_boot="$(printf '%q' "$BOOT")"
   local cmd
   if [[ "$TERMINAL_TMPL" == *"{cmd}"* ]]; then
-    cmd="${TERMINAL_TMPL//\{cmd\}/$inner}"
+    cmd="${TERMINAL_TMPL//\{cmd\}/$q_boot}"
   else
-    cmd="$TERMINAL_TMPL $inner"
+    cmd="$TERMINAL_TMPL $q_boot"
   fi
   bash -c "$cmd"
 }

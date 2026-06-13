@@ -109,8 +109,10 @@ Do NOT manually edit config files. Always use join.sh.
 #   --team <team>      team to join into (default: auto-resolved from the project)
 #   --window           new tmux window instead of splitting the current one
 #   --split h|v        tmux split direction (default h)
-#   --terminal <tmpl>  terminal command template ({cmd} placeholder) for the
-#                      non-tmux path; overrides $AGMSG_TERMINAL / config spawn.terminal
+#   --terminal <tmpl>  terminal command template ({cmd} = path to the boot
+#                      script) for the non-tmux path; overrides $AGMSG_TERMINAL
+#                      / config spawn.terminal. macOS default uses `open -a`
+#                      (no Automation/TCC permission prompt).
 ~/.agents/skills/agmsg/scripts/spawn.sh <claude-code|codex> <name> [options]
 ```
 

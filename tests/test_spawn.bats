@@ -114,10 +114,12 @@ teardown() {
   run bash "$SCRIPTS/identities.sh" "$PROJ" claude-code
   [[ "$output" =~ "alice" ]]
 
-  # The launch command cd'd into the project and ran claude with the actas
-  # slash command as the initial prompt. (printf %q escapes the spaces in the
-  # prompt as "\ ", so assert on individual tokens rather than the phrase.)
-  run cat "$CAPTURE"
+  # The terminal template is handed the path to a generated boot script; that
+  # script cd's into the project and runs claude with the actas slash command.
+  # (printf %q escapes the spaces in the prompt as "\ ", so assert on tokens.)
+  boot="$(cat "$CAPTURE")"
+  [ -f "$boot" ]
+  run cat "$boot"
   [[ "$output" == *"claude"* ]]
   [[ "$output" == *"agmsg"* ]]
   [[ "$output" == *"actas"* ]]
@@ -139,7 +141,9 @@ teardown() {
   bash "$SCRIPTS/join.sh" myteam existing codex "$PROJ"
   run bash "$SCRIPTS/spawn.sh" codex reviewer --project "$PROJ"
   [ "$status" -eq 0 ]
-  run cat "$CAPTURE"
+  boot="$(cat "$CAPTURE")"
+  [ -f "$boot" ]
+  run cat "$boot"
   [[ "$output" == *"codex"* ]]
   [[ "$output" == *"actas"* ]]
   [[ "$output" == *"reviewer"* ]]
