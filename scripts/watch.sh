@@ -91,7 +91,12 @@ cleanup() {
   [ "$(cat "$PIDFILE" 2>/dev/null)" = "$$" ] && rm -f "$PIDFILE"
   if [ -n "$READY_FILES" ]; then
     while IFS= read -r _rf; do
-      [ -n "$_rf" ] && rm -f "$_rf" 2>/dev/null || true
+      [ -z "$_rf" ] && continue
+      # Only remove a sentinel we still own. A successor actas watcher for the
+      # same (team, name) overwrites it with its own session_id before this one
+      # exits; without this guard our EXIT could delete the live successor's
+      # sentinel. Mirrors the pidfile guard above. See #108 review.
+      [ "$(cat "$_rf" 2>/dev/null)" = "$SESSION_ID" ] && rm -f "$_rf" 2>/dev/null || true
     done <<< "$READY_FILES"
   fi
 }
@@ -227,7 +232,10 @@ if [ -n "$ACTIVE_NAME" ]; then
   while IFS=$'\t' read -r _rt _ra; do
     [ -z "$_rt" ] && continue
     _rp="$(agmsg_ready_path "$_rt" "$_ra")"
-    : > "$_rp" 2>/dev/null || true
+    # Stamp our session_id so cleanup (and a successor watcher) can tell whose
+    # sentinel it is — keeps "present iff a live watcher is receiving" honest
+    # across a quick actas restart. See #108 review.
+    printf '%s\n' "$SESSION_ID" > "$_rp" 2>/dev/null || true
     READY_FILES="${READY_FILES:+$READY_FILES$'\n'}$_rp"
   done <<< "$PAIRS"
 fi
