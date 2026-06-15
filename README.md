@@ -63,6 +63,8 @@ The store is WAL-mode SQLite, so multiple readers and a single writer coexist wi
 
 agmsg ends up at `~/.agents/skills/agmsg/` no matter which install path you take. Pick whichever fits your setup.
 
+**Which path gets the latest?** The `git clone` and `setup.sh` (curl) paths install straight from `main`, so they're always current. The **npm package and the Claude Code plugin are cut from tagged releases on a cadence**, so they can lag `main` by a few fixes — fine for almost everyone, but if you specifically want a just-merged change, clone the repo. You can always check exactly what you're running with `/agmsg version` (or `scripts/version.sh`): a tagged release reads like `v1.0.3`, while a checkout ahead of the last release reads like `v1.0.3-6-g1a2b3c4` (6 commits past `v1.0.3`).
+
 ### npm / npx
 
 ```bash
