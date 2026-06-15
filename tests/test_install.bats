@@ -270,3 +270,56 @@ teardown() {
   ! grep -q 'rm -rf' "$stdout_capture"
   rm -f "$stdin_capture" "$stdout_capture"
 }
+
+@test "install: records a git-describe provenance VERSION and /version prints it" {
+  HOME="$FAKE_HOME" bash "$REPO_ROOT/install.sh" --cmd agmsg
+  # install.sh runs from a git checkout here, so the recorded version is a
+  # `git describe` string: a tag (v1.2.3-N-gSHA) when tags are present, or — in
+  # a tag-less checkout like CI's shallow clone — the bare abbreviated commit
+  # from `--always` (any hex, e.g. a828563). Accept both; just not "unknown".
+  [ -f "$SK/VERSION" ]
+  run cat "$SK/VERSION"
+  [ -n "$output" ]
+  [[ "$output" =~ ^(v[0-9]|[0-9]+\.[0-9]+|[0-9a-f]{7}) ]]
+  [[ "$output" != unknown* ]]
+  # /version (version.sh) prints the same recorded value.
+  run bash "$SK/scripts/version.sh"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(cat "$SK/VERSION")" ]
+}
+
+@test "install: --update refreshes the recorded VERSION" {
+  HOME="$FAKE_HOME" bash "$REPO_ROOT/install.sh" --cmd agmsg
+  echo "stale-marker" > "$SK/VERSION"
+  HOME="$FAKE_HOME" bash "$REPO_ROOT/install.sh" --update
+  run cat "$SK/VERSION"
+  [ "$output" != "stale-marker" ]
+}
+
+@test "version.sh falls back gracefully when no VERSION was recorded" {
+  HOME="$FAKE_HOME" bash "$REPO_ROOT/install.sh" --cmd agmsg
+  rm -f "$SK/VERSION"
+  run bash "$SK/scripts/version.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "unknown" ]]
+}
+
+@test "install: a non-git copy nested in a foreign git repo records canonical VERSION, not the parent's describe" {
+  # `git describe` searches ancestors for a .git. A non-git agmsg copy unpacked
+  # under some OTHER git repo must still record agmsg's canonical VERSION, not
+  # the parent repo's describe. See #117 review.
+  local parent="$BATS_TEST_TMPDIR/foreign"
+  mkdir -p "$parent"
+  git -C "$parent" init -q
+  git -C "$parent" -c user.email=t@e -c user.name=t commit -q --allow-empty -m init
+  git -C "$parent" tag v9.9.9
+  mkdir -p "$parent/agmsg-src"
+  cp -R "$REPO_ROOT/." "$parent/agmsg-src/"
+  rm -rf "$parent/agmsg-src/.git"   # non-git copy, nested under the foreign repo
+  local canonical; canonical="$(tr -d '[:space:]' < "$parent/agmsg-src/VERSION")"
+
+  HOME="$FAKE_HOME" bash "$parent/agmsg-src/install.sh" --cmd agmsg
+  run cat "$SK/VERSION"
+  [ "$output" = "$canonical" ]
+  [[ "$output" != v9.9.9* ]]
+}
