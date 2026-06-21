@@ -45,6 +45,10 @@ RUN_DIR="$SKILL_DIR/run"
 # strip/add reference it to detect agmsg-owned entries).
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/lib/hooks-json.sh"
+# Shared "rule-file" delivery behavior (rulefile_apply), delegated to by the
+# rule-file types' _delivery.sh plugs.
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/lib/delivery-rulefile.sh"
 
 # The per-project delivery hooks file is the type's manifest `hooks_file=`
 # (project-relative), not a hardcoded per-type case. The hook FORMAT written into
@@ -66,139 +70,13 @@ resolve_hooks_file() {
   echo "$project/$rel"
 }
 
-apply_settings_opencode() {
+# Default delivery behavior: JSON event-hooks (SessionStart / SessionEnd / Stop)
+# written into the type's hooks_file. Used by claude-code and codex. Rule-file
+# types override this by defining agmsg_delivery_apply in types/<name>/_delivery.sh.
+agmsg_delivery_apply_default() {
   local type="$1"
   local project="$2"
   local mode="$3"
-  local rule_file
-  rule_file=$(resolve_hooks_file "$type" "$project")
-
-  case "$mode" in
-    turn|off) ;;
-    monitor|both)
-      echo "Error: '$mode' mode is not supported for $type (no Monitor-tool equivalent). Use 'turn' or 'off'." >&2
-      return 1
-      ;;
-    *)
-      echo "Unknown mode: $mode (use turn|off)" >&2
-      return 1
-      ;;
-  esac
-
-  rm -f "$rule_file"
-
-  if [ "$mode" = "turn" ]; then
-    mkdir -p "$(dirname "$rule_file")"
-    cat <<EOF > "$rule_file"
-# agmsg Integration Rule
-
-## PostToolUse
-After each tool call, automatically check the agmsg inbox for unread messages.
-- Command: '$SKILL_DIR/scripts/check-inbox.sh' '$type' '$project'
-EOF
-  fi
-}
-
-apply_settings_copilot() {
-  local type="$1"
-  local project="$2"
-  local mode="$3"
-  local hooks_file
-  hooks_file=$(resolve_hooks_file "$type" "$project")
-
-  # Validate the mode BEFORE touching any existing file. Rejecting
-  # monitor/both must not destroy a working turn hook.
-  case "$mode" in
-    turn|off) ;;
-    monitor|both)
-      echo "Error: '$mode' mode is not supported for $type (no Monitor-tool equivalent). Use 'turn' or 'off'." >&2
-      return 1
-      ;;
-    *)
-      echo "Unknown mode: $mode (use turn|off)" >&2
-      return 1
-      ;;
-  esac
-
-  # Strip first so re-applying turn is an idempotent rewrite and turn->off
-  # cleanly removes the file.
-  rm -f "$hooks_file"
-
-  if [ "$mode" = "turn" ]; then
-    mkdir -p "$(dirname "$hooks_file")"
-    local cmd="'$SKILL_DIR/scripts/check-inbox.sh' '$type' '$project'"
-    # json_quote handles JSON-string escaping for arbitrary command strings
-    # (project paths may contain JSON-special chars).
-    local cmd_json
-    cmd_json=$(sqlite3 :memory: "SELECT json_quote('$(printf '%s' "$cmd" | sed "s/'/''/g")');")
-    # Use PascalCase 'Stop' trigger so the input payload field names match
-    # the snake_case form (session_id) that check-inbox.sh already parses.
-    cat <<EOF > "$hooks_file"
-{
-  "version": 1,
-  "hooks": {
-    "Stop": [
-      {
-        "type": "command",
-        "bash": $cmd_json,
-        "timeoutSec": 30
-      }
-    ]
-  }
-}
-EOF
-  fi
-}
-
-apply_settings_gemini() {
-  local type="$1"
-  local project="$2"
-  local mode="$3"
-  local rule_file
-  rule_file=$(resolve_hooks_file "$type" "$project")
-
-  # Remove existing rule file
-  rm -f "$rule_file"
-
-  case "$mode" in
-    turn|both)
-      mkdir -p "$(dirname "$rule_file")"
-      cat <<EOF > "$rule_file"
-# agmsg Integration Rule
-
-## PostToolUse
-After each tool call, automatically check the agmsg inbox for unread messages.
-- Command: '$SKILL_DIR/scripts/check-inbox.sh' '$type' '$project'
-EOF
-      ;;
-    monitor)
-      echo "Warning: 'monitor' mode is not fully supported for $type yet. Using turn-based hook." >&2
-      apply_settings_gemini "$type" "$project" "turn"
-      ;;
-    off)
-      ;;
-  esac
-}
-
-apply_settings() {
-  local type="$1"
-  local project="$2"
-  local mode="$3"
-
-  if [ "$type" = "gemini" ] || [ "$type" = "antigravity" ]; then
-    apply_settings_gemini "$type" "$project" "$mode"
-    return
-  fi
-
-  if [ "$type" = "copilot" ]; then
-    apply_settings_copilot "$type" "$project" "$mode"
-    return
-  fi
-
-  if [ "$type" = "opencode" ]; then
-    apply_settings_opencode "$type" "$project" "$mode"
-    return
-  fi
 
   local hooks_file
   hooks_file=$(resolve_hooks_file "$type" "$project")
@@ -252,6 +130,25 @@ apply_settings() {
   prune_empty_hooks_file "$tmp_state"
 
   mv "$tmp_state" "$hooks_file"
+}
+
+# Apply delivery settings for a type (Template Method). A type may ship a
+# delivery plug at types/<name>/_delivery.sh that defines agmsg_delivery_apply to
+# override the default JSON event-hooks behavior; otherwise the default is used.
+apply_settings() {
+  local type="$1"
+  local project="$2"
+  local mode="$3"
+
+  local tdir
+  tdir="$(agmsg_type_dir "$type" 2>/dev/null || true)"
+  if [ -n "$tdir" ] && [ -f "$tdir/_delivery.sh" ]; then
+    # shellcheck disable=SC1090
+    . "$tdir/_delivery.sh"
+    agmsg_delivery_apply "$type" "$project" "$mode"
+  else
+    agmsg_delivery_apply_default "$type" "$project" "$mode"
+  fi
 }
 
 CODEX_MONITOR_DOC_URL="https://github.com/fujibee/agmsg/blob/main/docs/codex-monitor-beta.md"
