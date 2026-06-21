@@ -269,7 +269,7 @@ Codex supports `mode monitor` as a **beta** app-server bridge, plus `mode turn` 
 
 > ⚠️ **The monitor beta changes how Codex starts — opt in only if you understand it.** Codex has no Monitor tool, so `mode monitor` installs a shim at `~/.agents/bin/codex` and asks you to put `~/.agents/bin` **first on your PATH**, so `codex` then resolves to the shim instead of the real binary. In monitor-mode projects the shim routes interactive launches through a bridge that turns incoming agmsg messages into turns on the current Codex thread; `codex exec` and non-monitor projects pass straight through to the real Codex. It depends on experimental Codex app-server behavior and has known rough edges (orphans on TUI close — #149; one identity per project — #150).
 
-If the shim can't be installed, launch with `~/.agents/skills/<cmd>/types/codex/codex-monitor.sh`. Codex sandboxing must allow writes to the skill's `db/`, `teams/`, and `run/` dirs — `install.sh` configures those `writable_roots` when `~/.codex/config.toml` exists. Setup, PATH notes, and internals: [docs/codex-monitor-beta.md](docs/codex-monitor-beta.md).
+If the shim can't be installed, launch with `~/.agents/skills/<cmd>/scripts/drivers/types/codex/codex-monitor.sh`. Codex sandboxing must allow writes to the skill's `db/`, `teams/`, and `run/` dirs — `install.sh` configures those `writable_roots` when `~/.codex/config.toml` exists. Setup, PATH notes, and internals: [docs/codex-monitor-beta.md](docs/codex-monitor-beta.md).
 
 ### GitHub Copilot CLI
 
@@ -375,6 +375,7 @@ Auto-detects installed skill directories and cleans up: skill files, slash comma
 | Variable | Default | Purpose |
 |---|---|---|
 | `AGMSG_STORAGE_PATH` | `<skill>/db` | Directory holding the SQLite message store (`messages.db`). Override to relocate the store — handy for tests, sandboxes, or running isolated instances. |
+| `AGMSG_PLUGIN_DIRS` | (unset) | `:`-separated extra directories to search for external drivers, in addition to `<skill>/plugins`. Each holds `<axis>/<name>/` subdirs. Drivers found here are still ignored until opted into with `agmsg plugin trust`. See [docs/plugins.md](docs/plugins.md). |
 
 The message store path resolves as **`AGMSG_STORAGE_PATH` (env) > built-in default**. (A config-file layer is planned to slot in between the two as part of the storage-driver work; the intended order is env > config > default.) The override is scoped to the SQLite store only — team configs under `teams/` are unaffected.
 
@@ -475,8 +476,10 @@ bats tests/    # requires bats-core: brew install bats-core
 ├── SKILL.md                      # Skill definition (read by CC & Codex)
 ├── agents/
 │   └── openai.yaml               # Codex metadata
-├── scripts/                      # Bash scripts
-├── templates/                    # Command templates per tool
+├── scripts/                      # Bash scripts (the type-agnostic engine)
+│   ├── lib/                      # Sourced helper libraries
+│   └── drivers/types/<name>/     # Built-in agent-type drivers (manifest + runtime)
+├── plugins/<axis>/<name>/        # External drivers you opt into (agmsg plugin trust)
 ├── db/messages.db                # SQLite WAL-mode message store
 └── teams/                        # Team configs (self-contained)
     └── <team>/
@@ -489,6 +492,22 @@ bats tests/    # requires bats-core: brew install bats-core
 - **Auto detection**: Stop hook checks inbox after each response (60s cooldown, configurable via `hook.check_interval`)
 - **No daemon**: Direct filesystem access
 - **No network**: Everything local
+
+## Plugins
+
+agmsg's pluggable units are **drivers** grouped by axis (`types` for agent
+runtimes; `storage` and `delivery` to follow). Built-ins ship under
+`scripts/drivers/`; you can drop your own under `<skill>/plugins/<axis>/<name>/`
+(or point `AGMSG_PLUGIN_DIRS` at a directory) to extend agmsg without forking.
+
+Because a driver is shell code that runs with your privileges, **external drivers
+are never loaded until you opt in** — an unexpected drop-in is ignored (with a
+warning) until you run `agmsg plugin trust <axis>/<name>`. List what's discovered
+and its trust state with `agmsg plugin list`.
+
+Full discovery order, the trust model, and authoring guidance:
+[docs/plugins.md](docs/plugins.md) (design rationale in
+[ADR 0002](docs/adr/0002-driver-discovery-and-plugin-opt-in.md)).
 
 ## Community
 

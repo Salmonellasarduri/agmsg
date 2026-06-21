@@ -257,6 +257,11 @@ if [ "$UPDATE_ONLY" = true ]; then
   # ship without enumerating files. The agent-type manifests and per-type runtimes
   # live under scripts/drivers/types/ now, so this single copy carries them too.
   cp -R "$SCRIPT_DIR/scripts/." "$SKILL_DIR/scripts/"
+  # Ship the external-plugin drop-in dir (just its README) so the location exists
+  # post-install. A plain cp — not cp -R --delete — preserves any plugins the
+  # user dropped in and their db/trusted-plugins opt-ins.
+  mkdir -p "$SKILL_DIR/plugins"
+  cp "$SCRIPT_DIR/plugins/README.md" "$SKILL_DIR/plugins/README.md" 2>/dev/null || true
   # Refresh the Claude Code slash command file (was missed in earlier --update flows).
   CC_COMMANDS_DIR="$HOME/.claude/commands"
   if [ -d "$CC_COMMANDS_DIR" ] && [ -f "$CC_COMMANDS_DIR/$SKILL_NAME.md" ]; then
@@ -325,6 +330,11 @@ sed "s/__SKILL_NAME__/$CMD_NAME/g" "$(agmsg_type_template_path "$TPL_TYPE")" > "
 # without enumerating files. The agent-type manifests and per-type runtimes live
 # under scripts/drivers/types/ now, so this single copy carries them too.
 cp -R "$SCRIPT_DIR/scripts/." "$SKILL_DIR/scripts/"
+# Ship the external-plugin drop-in dir (just its README) so the location exists
+# post-install. A plain cp — not cp -R --delete — preserves any plugins the user
+# dropped in and their db/trusted-plugins opt-ins.
+mkdir -p "$SKILL_DIR/plugins"
+cp "$SCRIPT_DIR/plugins/README.md" "$SKILL_DIR/plugins/README.md" 2>/dev/null || true
 
 cp "$SCRIPT_DIR/openai.yaml" "$SKILL_DIR/agents/openai.yaml" 2>/dev/null || true
 chmod +x "$SKILL_DIR/scripts/"*.sh
