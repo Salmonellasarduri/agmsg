@@ -313,6 +313,12 @@ if [ "$UPDATE_ONLY" = true ]; then
   echo "  ! Restart any running agent sessions to pick up the updated scripts."
   echo "    In-flight watch.sh processes keep the old code until they restart."
   echo ""
+  echo "  ! If a project uses 'monitor'/'both'/'turn' delivery, re-run"
+  echo "    'delivery.sh set <mode> <type> <project>' there. An upgrade (or a skill"
+  echo "    manager that rewrites settings) can drop the SessionStart/Stop hook from"
+  echo "    a project's settings, silently stopping delivery until it is re-registered."
+  echo "    Check with 'delivery.sh status <type> <project>'. (#133)"
+  echo ""
   echo "  ✓ Update complete"
   echo ""
   exit 0

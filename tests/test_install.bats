@@ -61,6 +61,16 @@ teardown() {
   grep -q "backup sentinel" "$backup/SKILL.md"
 }
 
+@test "install: --update warns to re-register delivery hooks (#133)" {
+  HOME="$FAKE_HOME" bash "$REPO_ROOT/install.sh" --cmd agmsg
+  run env HOME="$FAKE_HOME" bash "$REPO_ROOT/install.sh" --cmd agmsg --update
+  [ "$status" -eq 0 ]
+  # Surface the silent-delivery-loss footgun: an upgrade can drop a project's
+  # SessionStart/Stop hook, so the user is told to re-run delivery.sh set.
+  [[ "$output" =~ "delivery.sh set" ]]
+  [[ "$output" =~ "#133" ]]
+}
+
 @test "install: AGMSG_STORAGE_PATH override works against the installed skill" {
   HOME="$FAKE_HOME" bash "$REPO_ROOT/install.sh" --cmd agmsg
   local store="$FAKE_HOME/override-store"
