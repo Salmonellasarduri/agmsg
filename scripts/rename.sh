@@ -58,9 +58,15 @@ UPDATED=$(agmsg_sqlite_mem ".param set :json '$CONFIG_ESCAPED'" \
 agmsg_write_atomic "$TEAM_CONFIG" "$UPDATED"
 
 # --- Update messages in DB ---
+# Escape every interpolated value as a SQL string literal (#223, #87): an agent
+# or team name may contain a single quote, which would otherwise break the UPDATE
+# and is an injection surface (e.g. a name widening the WHERE predicate).
 if [ -f "$DB" ]; then
-  agmsg_sqlite "$DB" "UPDATE messages SET from_agent='$(_agmsg_sqlesc "$NEW_NAME")' WHERE team='$(_agmsg_sqlesc "$TEAM")' AND from_agent='$(_agmsg_sqlesc "$OLD_NAME")';"
-  agmsg_sqlite "$DB" "UPDATE messages SET to_agent='$(_agmsg_sqlesc "$NEW_NAME")' WHERE team='$(_agmsg_sqlesc "$TEAM")' AND to_agent='$(_agmsg_sqlesc "$OLD_NAME")';"
+  TEAM_LIT=$(agmsg_sqlesc "$TEAM")
+  OLD_LIT=$(agmsg_sqlesc "$OLD_NAME")
+  NEW_LIT=$(agmsg_sqlesc "$NEW_NAME")
+  agmsg_sqlite "$DB" "UPDATE messages SET from_agent='$NEW_LIT' WHERE team='$TEAM_LIT' AND from_agent='$OLD_LIT';"
+  agmsg_sqlite "$DB" "UPDATE messages SET to_agent='$NEW_LIT' WHERE team='$TEAM_LIT' AND to_agent='$OLD_LIT';"
 fi
 
 agmsg_lock_release
