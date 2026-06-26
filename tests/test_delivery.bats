@@ -1503,6 +1503,15 @@ EOF
   echo "$bpid" > "$TEST_SKILL_DIR/run/codex-bridge.team.alice.pid"
   echo "pid=$bpid" > "$TEST_SKILL_DIR/run/codex-bridge.team.alice.meta"
   : > "$TEST_SKILL_DIR/run/codex-bridge.team.alice.log"
+  # The launcher's stale-binding sidecar + the project's shared app-server record
+  # must be torn down too. Use a non-codex pid for the server record so the
+  # cmdline guard skips the kill — the record is still dropped.
+  : > "$TEST_SKILL_DIR/run/codex-bridge.team.alice.appserver"
+  source "$SCRIPTS/lib/hash.sh"
+  local h; h="$(printf '%s' "$TEST_PROJECT" | agmsg_sha1)"
+  echo 2147483647 > "$TEST_SKILL_DIR/run/codex-app-server.$h.pid"
+  : > "$TEST_SKILL_DIR/run/codex-app-server.$h.port"
+  : > "$TEST_SKILL_DIR/run/codex-app-server.$h.version"
 
   run bash "$SCRIPTS/delivery.sh" set off codex "$TEST_PROJECT"
   [ "$status" -eq 0 ]
@@ -1511,6 +1520,10 @@ EOF
   ! kill -0 "$bpid" 2>/dev/null
   [ ! -f "$TEST_SKILL_DIR/run/codex-bridge.team.alice.pid" ]
   [ ! -f "$TEST_SKILL_DIR/run/codex-bridge.team.alice.meta" ]
+  [ ! -f "$TEST_SKILL_DIR/run/codex-bridge.team.alice.appserver" ]
+  [ ! -f "$TEST_SKILL_DIR/run/codex-app-server.$h.pid" ]
+  [ ! -f "$TEST_SKILL_DIR/run/codex-app-server.$h.port" ]
+  [ ! -f "$TEST_SKILL_DIR/run/codex-app-server.$h.version" ]
   kill "$bpid" 2>/dev/null || true
 }
 
