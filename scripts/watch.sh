@@ -32,7 +32,19 @@ source "$(cd "$(dirname "$0")" && pwd)/lib/compat.sh"
 #   - Writes a pidfile at ~/.agents/agmsg/run/watch.<session_id>.pid and
 #     removes it on EXIT / SIGTERM / SIGINT.
 
-SESSION_ID="${1:?Usage: watch.sh <session_id> <project_path> <agent_type> [active_name]}"
+# session_id is normally baked into the launch command (CLAUDE_CODE_SESSION_ID /
+# GROK_SESSION_ID). But some runtimes do not export a session id into the
+# watcher's shell — notably Grok Build's `monitor` tool, where the rule's literal
+# "$GROK_SESSION_ID" expands to empty — so failing hard here would stop the
+# watcher from ever starting (it fails fast with a "Usage" error on the first
+# launch). Generate a fallback id instead, mirroring the bridge's
+# CLAUDE_CODE_SESSION_ID fallback: the watcher only needs SOME unique id to key
+# its pidfile/watermark; parallel --continue/--resume isolation (#93) is then
+# best-effort. project_path and agent_type are still required.
+SESSION_ID="${1:-}"
+if [ -z "$SESSION_ID" ]; then
+  SESSION_ID="agmsg-$(compat_uuidgen | tr 'A-Z' 'a-z')"
+fi
 PROJECT_PATH="${2:?Missing project_path}"
 AGENT_TYPE="${3:?Missing agent_type}"
 ACTIVE_NAME="${4:-}"
