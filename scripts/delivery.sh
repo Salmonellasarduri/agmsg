@@ -41,6 +41,10 @@ RUN_DIR="$SKILL_DIR/run"
 . "$SCRIPT_DIR/lib/instance-id.sh"
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/lib/node.sh"
+# hash.sh provides agmsg_sha1 — stop_codex_bridge derives the per-project
+# app-server record paths (codex-app-server.<hash>.{pid,port,version}) from it.
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/lib/hash.sh"
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/lib/type-registry.sh"
 # storage.sh provides agmsg_sqlite_mem (CR-safe sqlite, #180); hooks-json.sh's
@@ -292,10 +296,11 @@ by this command.
 EOF
 }
 
-# Stop the Codex monitor bridge(s) for a project and remove their run artifacts.
-# Used by `set off codex` (and the manual counterpart to the not-yet-wired auto
-# teardown, #149). Leaves the shared app-server and the global shim alone — only
-# the per-identity bridge is project-scoped. Echoes how many were killed.
+# Stop the Codex monitor bridge(s) for a project and remove their run artifacts,
+# then tear down the project's shared app-server record too (it is keyed per
+# project, so `off` should not leave it running). Used by `set off codex` (and
+# the manual counterpart to the not-yet-wired auto teardown, #149). The global
+# shim is left alone (it is cross-project). Echoes how many bridges were killed.
 stop_codex_bridge() {
   local project="$1"
   local pairs team name pidfile bpid killed=0
@@ -309,11 +314,40 @@ stop_codex_bridge() {
       if [ -n "$bpid" ] && kill -0 "$bpid" 2>/dev/null; then
         kill "$bpid" 2>/dev/null && killed=$((killed + 1))
       fi
-      rm -f "$pidfile" "${pidfile%.pid}.meta" "${pidfile%.pid}.log"
+      # .appserver records which app-server URL the bridge was bound to (the
+      # launcher's stale-binding guard); drop it with the rest so it cannot
+      # mislead a later launcher.
+      rm -f "$pidfile" "${pidfile%.pid}.meta" "${pidfile%.pid}.log" "${pidfile%.pid}.appserver"
     done <<EOF
 $pairs
 EOF
   fi
+
+  # Tear down the project's shared app-server too. It is keyed per project
+  # (codex-app-server.<hash>.{pid,port,version}); turning delivery off means no
+  # bridge needs it, and leaving it running keeps a stale port the next launch
+  # would have to recreate anyway. Only kill the recorded pid when its cmdline
+  # confirms it is our app-server (a recycled pid could be unrelated); drop the
+  # record either way.
+  local project_hash server_pidfile server_pid server_cmd
+  project_hash="$(printf '%s' "$project" | agmsg_sha1 2>/dev/null || true)"
+  if [ -n "$project_hash" ]; then
+    server_pidfile="$RUN_DIR/codex-app-server.$project_hash.pid"
+    if [ -f "$server_pidfile" ]; then
+      server_pid="$(cat "$server_pidfile" 2>/dev/null || true)"
+      if [ -n "$server_pid" ] && kill -0 "$server_pid" 2>/dev/null; then
+        server_cmd="$(compat_get_cmdline "$server_pid" 2>/dev/null || true)"
+        case "$server_cmd" in
+          *codex*app-server*) kill "$server_pid" 2>/dev/null || true ;;
+        esac
+      fi
+      rm -f "$RUN_DIR/codex-app-server.$project_hash.pid" \
+            "$RUN_DIR/codex-app-server.$project_hash.port" \
+            "$RUN_DIR/codex-app-server.$project_hash.version" \
+            "$RUN_DIR/codex-app-server.$project_hash.log"
+    fi
+  fi
+
   echo "$killed"
 }
 
