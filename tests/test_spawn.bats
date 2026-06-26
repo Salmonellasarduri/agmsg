@@ -152,9 +152,10 @@ teardown() {
 }
 
 @test "spawn: grok-build launches the plain grok CLI with the actas prompt" {
-  # grok-build is spawnable and monitor=no, so spawn skips the readiness wait.
-  # Delivery is a rule file (no hook), so no folder-trust flag is needed —
-  # the launch is the bare `grok "/<cmd> actas <name>"`, like claude-code.
+  # grok-build is spawnable; --no-wait skips the readiness handshake here so the
+  # test asserts only the launch command. Delivery is a rule file (no hook), so
+  # no folder-trust flag is needed — the launch is the bare
+  # `grok "/<cmd> actas <name>"`, like claude-code.
   bash "$SCRIPTS/join.sh" myteam existing claude-code "$PROJ"
   run bash "$SCRIPTS/spawn.sh" grok-build alice --project "$PROJ" --no-wait
   [ "$status" -eq 0 ]
