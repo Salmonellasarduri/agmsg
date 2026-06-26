@@ -28,18 +28,24 @@ case "${1:-}" in
       echo "error: unexpected argument '--listen' found" >&2
       exit 2
     fi
-    exec python3 - <<'PY'
-import socket, sys, time
+    # Run the listener as a CHILD (no exec) so this script stays the recorded pid;
+    # its argv ("...real-codex app-server --listen") is what codex-monitor's
+    # cmdline check matches. The child exits when this parent is killed.
+    python3 - <<'PY'
+import socket, sys, os
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-s.bind(("127.0.0.1", 0)); s.listen(16)
+s.bind(("127.0.0.1", 0)); s.listen(16); s.settimeout(0.2)
 print("codex app-server (WebSockets)")
 print("  listening on: ws://127.0.0.1:%d" % s.getsockname()[1]); sys.stdout.flush()
+ppid = os.getppid()
 while True:
+    if os.getppid() != ppid:
+        break
     try:
         c, _ = s.accept(); c.close()
     except Exception:
-        time.sleep(0.05)
+        pass
 PY
     ;;
   *)
@@ -120,4 +126,45 @@ teardown() {
   [ "$status" -eq 0 ]
   # Same server reused (pid unchanged), not recreated.
   [ "$(cat "$pidf")" = "$first_pid" ]
+}
+
+@test "codex-monitor: never kills a non-codex process recorded under a reused pid" {
+  skip_on_windows "spawns a python socket listener; flaky on the Windows runner"
+
+  # A foreign process holding the recorded port (e.g. the codex pid was recycled).
+  local portf="$TEST_PROJECT/foreign.port"
+  python3 -c '
+import socket, sys
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", 0)); s.listen(8); s.settimeout(0.5)
+open(sys.argv[1], "w").write(str(s.getsockname()[1]))
+while True:
+    try:
+        c, _ = s.accept(); c.close()
+    except Exception:
+        pass
+' "$portf" &
+  local foreign_pid=$!
+  while [ ! -s "$portf" ]; do sleep 0.05; done
+  local foreign_port; foreign_port="$(cat "$portf")"
+
+  # Seed the run artifacts to point the reuse logic at that foreign process.
+  local resolved hash base run
+  resolved="$(cd "$TEST_PROJECT" && pwd)"
+  hash="$(printf '%s' "$resolved" | ( . "$SCRIPTS/lib/hash.sh"; agmsg_sha1 ))"
+  run="$TEST_SKILL_DIR/run"; mkdir -p "$run"
+  base="$run/codex-app-server.$hash"
+  echo "$foreign_port" > "$base.port"
+  echo "$foreign_pid"  > "$base.pid"
+  echo "codex-cli 9.9.9" > "$base.version"
+
+  run env FAKE_CODEX_VERSION=0.142.2 AGMSG_REAL_CODEX="$FAKE_CODEX" \
+    bash "$TYPES/codex/codex-monitor.sh" --project "$TEST_PROJECT" --codex-command codex --
+  [ "$status" -eq 0 ]
+  # The foreign process must NOT have been killed...
+  kill -0 "$foreign_pid"
+  # ...and a fresh app-server of our own was started under a different pid.
+  [ "$(cat "$base.pid")" != "$foreign_pid" ]
+
+  kill "$foreign_pid" 2>/dev/null || true
 }

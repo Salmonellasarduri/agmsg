@@ -12,6 +12,8 @@ SKILL_DIR="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 RUN_DIR="$SKILL_DIR/run"
 # shellcheck source=../../../lib/hash.sh
 source "$SCRIPT_DIR/../../../lib/hash.sh"
+# shellcheck source=../../../lib/compat.sh
+source "$SCRIPT_DIR/../../../lib/compat.sh"
 
 PROJECT="$(pwd)"
 SOCKET_PATH=""
@@ -98,7 +100,7 @@ SERVER_PID="$RUN_DIR/codex-app-server.$PROJECT_HASH.pid"
 PORT_FILE="$RUN_DIR/codex-app-server.$PROJECT_HASH.port"
 # Records the codex version that launched the reusable app-server. A TUI from a
 # newer/older codex can't speak to an app-server from a different build, so a
-# stale server left running across a codex upgrade must not be reused (#NNN).
+# stale server left running across a codex upgrade must not be reused.
 VERSION_FILE="$RUN_DIR/codex-app-server.$PROJECT_HASH.version"
 CODEX_VERSION="$("$REAL_CODEX" --version 2>/dev/null || true)"
 
@@ -121,18 +123,33 @@ if [ -f "$PORT_FILE" ] && [ -f "$SERVER_PID" ]; then
   # mistaken for the bridge app-server.
   if [ -n "$existing_port" ] && [ -n "$existing_pid" ] \
     && kill -0 "$existing_pid" 2>/dev/null && port_alive "$existing_port"; then
-    # ...and only when it was launched by THIS codex build. A codex upgrade leaves
-    # the old app-server process running on the recorded port; its port still
-    # answers, but a new TUI's --remote can't speak to the old server and dies
-    # with "failed to connect to remote app server". Treat a version mismatch as
-    # stale: kill the old server and start a fresh one. (If we can't read the
-    # current version, fall back to liveness-only reuse — the prior behaviour.)
-    if [ -z "$CODEX_VERSION" ] || [ "$existing_version" = "$CODEX_VERSION" ]; then
-      PORT="$existing_port"
-    else
-      kill "$existing_pid" 2>/dev/null || true
-      rm -f "$PORT_FILE" "$SERVER_PID" "$VERSION_FILE"
-    fi
+    # Confirm the recorded pid is actually OUR codex app-server before trusting OR
+    # killing it: a recycled pid could belong to an unrelated process while the
+    # recorded port happens to answer via something else. Only reuse/kill when the
+    # cmdline proves it.
+    existing_cmd="$(compat_get_cmdline "$existing_pid" 2>/dev/null || true)"
+    case "$existing_cmd" in
+      *codex*app-server*)
+        # ...and only when it was launched by THIS codex build. A codex upgrade
+        # leaves the old app-server running on the recorded port; the port still
+        # answers, but a new TUI's --remote can't speak to the old server and dies
+        # with "failed to connect to remote app server". Treat a version mismatch
+        # as stale: kill the (confirmed-ours) old server and start fresh. If we
+        # can't read the current version, fall back to liveness-only reuse.
+        if [ -z "$CODEX_VERSION" ] || [ "$existing_version" = "$CODEX_VERSION" ]; then
+          PORT="$existing_port"
+        else
+          kill "$existing_pid" 2>/dev/null || true
+          rm -f "$PORT_FILE" "$SERVER_PID" "$VERSION_FILE"
+        fi
+        ;;
+      *)
+        # Can't confirm it's our app-server (pid reuse / a foreign listener on the
+        # recorded port): do NOT kill it. Drop the stale artifacts and start a
+        # fresh server of our own.
+        rm -f "$PORT_FILE" "$SERVER_PID" "$VERSION_FILE"
+        ;;
+    esac
   fi
 fi
 
