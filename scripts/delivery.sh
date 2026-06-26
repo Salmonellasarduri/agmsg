@@ -296,10 +296,11 @@ by this command.
 EOF
 }
 
-# Stop the Codex monitor bridge(s) for a project and remove their run artifacts.
-# Used by `set off codex` (and the manual counterpart to the not-yet-wired auto
-# teardown, #149). Leaves the shared app-server and the global shim alone — only
-# the per-identity bridge is project-scoped. Echoes how many were killed.
+# Stop the Codex monitor bridge(s) for a project and remove their run artifacts,
+# then tear down the project's shared app-server record too (it is keyed per
+# project, so `off` should not leave it running). Used by `set off codex` (and
+# the manual counterpart to the not-yet-wired auto teardown, #149). The global
+# shim is left alone (it is cross-project). Echoes how many bridges were killed.
 stop_codex_bridge() {
   local project="$1"
   local pairs team name pidfile bpid killed=0
