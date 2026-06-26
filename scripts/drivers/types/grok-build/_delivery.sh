@@ -147,8 +147,12 @@ _agmsg_grok_emit_monitor_directive() {
   local type="$1" project="$2"
   local watch="$SKILL_DIR/scripts/watch.sh"
 
-  # Grok exports GROK_SESSION_ID for every subprocess; bake it in so the agent
-  # never invents a value and SessionEnd-style cleanup can find the pidfile.
+  # Bake GROK_SESSION_ID in when it is set here, so the agent does not invent a
+  # value and cleanup can find the pidfile. NOTE: Grok does NOT reliably export
+  # GROK_SESSION_ID into the `monitor` tool's own shell — the rule's literal
+  # "$GROK_SESSION_ID" can expand to empty there — so watch.sh self-generates a
+  # fallback id when its first arg is empty rather than failing. This directive
+  # path still bakes the real id when delivery.sh runs with it in the env.
   local session_id="${GROK_SESSION_ID:-}"
   if [ -z "$session_id" ]; then
     session_id="agmsg-$(compat_uuidgen | tr 'A-Z' 'a-z')"

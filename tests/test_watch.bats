@@ -381,3 +381,21 @@ _wait_pidfile() {
   # Exactly one line: 0 would mean a silent spin, >1 a re-emitting loop.
   [ "$(grep -c 'ERROR: cannot open message DB' "$out")" -eq 1 ]
 }
+
+# Empty session_id fallback (#236 grok monitor): Grok's `monitor` tool may run
+# the launch command with an empty $GROK_SESSION_ID, so watch.sh must self-assign
+# an id and start, not die with a "Usage" error (which left the monitor down).
+@test "watch: empty session_id gets a generated fallback instead of a Usage error (#236)" {
+  local out="$BATS_TEST_TMPDIR/empty-sid.out"
+  AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" "" "$PROJ" claude-code alice >"$out" 2>&1 &
+  local pid=$!
+  # A fallback id means a watch.agmsg-*.pid appears under run/ as the watcher arms.
+  local i started=0
+  for i in $(seq 1 25); do
+    if ls "$TEST_SKILL_DIR/run"/watch.agmsg-*.pid >/dev/null 2>&1; then started=1; break; fi
+    sleep 0.2
+  done
+  kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true
+  [ "$started" -eq 1 ]
+  ! grep -q "Usage: watch.sh" "$out"
+}
