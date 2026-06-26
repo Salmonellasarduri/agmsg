@@ -362,3 +362,22 @@ _wait_pidfile() {
   wait "$w2" 2>/dev/null || true
   wait "$sesspid" 2>/dev/null || true
 }
+
+# DB-open healthcheck (#197): a store that exists but cannot be opened (the
+# native sqlite3.exe / Git Bash /c/ path mismatch, or bad perms) must surface a
+# loud error rather than spin silently delivering nothing.
+@test "watch: surfaces an unopenable DB once instead of spinning silently (#197)" {
+  [ "$(id -u)" -eq 0 ] && skip "chmod 000 is ineffective as root"
+  local DB="$TEST_SKILL_DIR/db/messages.db"
+  [ -f "$DB" ]                # init-db.sh created it in setup_test_env
+  chmod 000 "$DB"
+  local out="$BATS_TEST_TMPDIR/hc.out"
+  AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" "sess-hc" "$PROJ" claude-code >"$out" 2>/dev/null &
+  local pid=$!
+  sleep 2                     # > one poll interval; a spinning watcher would re-emit
+  kill "$pid" 2>/dev/null || true   # no-op if the healthcheck already exited
+  wait "$pid" 2>/dev/null || true
+  chmod 644 "$DB" 2>/dev/null || true
+  # Exactly one line: 0 would mean a silent spin, >1 a re-emitting loop.
+  [ "$(grep -c 'ERROR: cannot open message DB' "$out")" -eq 1 ]
+}
