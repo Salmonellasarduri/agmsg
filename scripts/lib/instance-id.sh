@@ -104,6 +104,39 @@ agmsg_normalize_instance_id() {
   agmsg_instance_id "$token" "$type"
 }
 
+# Resolve a stable, session-bound instance id for a grok-build watcher.
+#
+# Grok Build's `monitor` tool launches the watcher in a shell where
+# GROK_SESSION_ID is unset and detached from grok's process tree, so neither the
+# env var nor the agmsg_agent_pid ppid walk yields grok's session. The watcher
+# would otherwise key on a throwaway id (a fresh one per relaunch → a fresh
+# watermark → replayed/“start from now” gaps, and no liveness gating). Instead,
+# find the live `grok --resume <id>` whose <id> belongs to THIS project's grok
+# session dir and key on "<id>.<pid>": a composite that is STABLE across watcher
+# relaunches (same session → same watermark/pidfile) and liveness-gated on the
+# grok pid. Prints "<id>.<pid>" and returns 0 on success; 1 if none is found
+# (caller then falls back to a throwaway id so the watcher still starts).
+agmsg_grok_resume_instance_id() {
+  local project="$1" enc sess_dir gp gargs gid
+  [ -n "$project" ] || return 1
+  # grok url-encodes the project path (only '/' → '%2F') for its session dir.
+  enc=$(printf '%s' "$project" | sed 's#/#%2F#g')
+  sess_dir="$HOME/.grok/sessions/$enc"
+  [ -d "$sess_dir" ] || return 1
+  for gp in $(pgrep -x grok 2>/dev/null || true); do
+    gargs=$(ps -o args= -p "$gp" 2>/dev/null || true)
+    case "$gargs" in *--resume*) ;; *) continue ;; esac
+    gid=$(printf '%s' "$gargs" | sed -n 's/.*--resume[ =]*\([0-9A-Za-z][0-9A-Za-z-]*\).*/\1/p')
+    [ -n "$gid" ] || continue
+    # Confirm this session belongs to the project we're watching.
+    if [ -e "$sess_dir/$gid" ]; then
+      printf '%s.%s' "$gid" "$gp"
+      return 0
+    fi
+  done
+  return 1
+}
+
 # True iff <token> identifies a still-live instance.
 #   composite "<sid>.<pid>" → the embedded pid is alive (kill -0).
 #   bare "<sid>"            → some live cc-instance.<p> file references it. For

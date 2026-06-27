@@ -33,18 +33,11 @@ source "$(cd "$(dirname "$0")" && pwd)/lib/compat.sh"
 #     removes it on EXIT / SIGTERM / SIGINT.
 
 # session_id is normally baked into the launch command (CLAUDE_CODE_SESSION_ID /
-# GROK_SESSION_ID). But some runtimes do not export a session id into the
-# watcher's shell — notably Grok Build's `monitor` tool, where the rule's literal
-# "$GROK_SESSION_ID" expands to empty — so failing hard here would stop the
-# watcher from ever starting (it fails fast with a "Usage" error on the first
-# launch). Generate a fallback id instead, mirroring the bridge's
-# CLAUDE_CODE_SESSION_ID fallback: the watcher only needs SOME unique id to key
-# its pidfile/watermark; parallel --continue/--resume isolation (#93) is then
-# best-effort. project_path and agent_type are still required.
+# GROK_SESSION_ID). An empty first arg is tolerated and resolved below (after the
+# libs are sourced) rather than failing hard, so a runtime that cannot bake one
+# in — notably Grok Build's `monitor` tool, where "$GROK_SESSION_ID" expands to
+# empty — still starts the watcher. project_path and agent_type are required.
 SESSION_ID="${1:-}"
-if [ -z "$SESSION_ID" ]; then
-  SESSION_ID="agmsg-$(compat_uuidgen | tr 'A-Z' 'a-z')"
-fi
 PROJECT_PATH="${2:?Missing project_path}"
 AGENT_TYPE="${3:?Missing agent_type}"
 ACTIVE_NAME="${4:-}"
@@ -56,6 +49,22 @@ source "$SCRIPT_DIR/lib/storage.sh"
 source "$SCRIPT_DIR/lib/actas-lock.sh"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/resolve-project.sh"
+
+# Resolve a session id when the launcher could not bake one in (empty first arg).
+# Grok Build's `monitor` tool runs the watcher with $GROK_SESSION_ID unset and
+# detached from grok's process tree, so neither the env var nor the instance-id
+# ppid walk yields grok's session. Bind to the live `grok --resume <id>` for this
+# project instead — keyed as <id>.<pid>, the watermark/pidfile are stable across
+# watcher relaunches (no replay gap) and liveness-gated on the grok pid. Fall
+# back to a throwaway id only if that can't be found, so the watcher still starts
+# (#238). Uses the raw project path the watcher was launched with, before
+# agmsg_resolve_project rewrites it, to match grok's session dir.
+if [ -z "$SESSION_ID" ]; then
+  case "$AGENT_TYPE" in
+    grok-build) SESSION_ID="$(agmsg_grok_resume_instance_id "$PROJECT_PATH" 2>/dev/null || true)" ;;
+  esac
+  [ -z "$SESSION_ID" ] && SESSION_ID="agmsg-$(compat_uuidgen | tr 'A-Z' 'a-z')"
+fi
 
 # Resolve the session's real project root (see #92). The actas/drop/ensure-
 # monitor flows relaunch this watcher with a raw "$(pwd)"; without resolution a
