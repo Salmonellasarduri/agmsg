@@ -87,6 +87,10 @@ it once:
    - command: \`$SKILL_DIR/scripts/watch.sh "\$GROK_SESSION_ID" '$project' $type\`
    - description: \`agmsg inbox stream\`
    - persistent: true
+   Use the command EXACTLY as written. Do NOT append \`| head\`, \`| tail\`, any
+   other pipe, or a redirection: each watcher line is one message, and a closed
+   pipe (e.g. \`head\` exiting after N lines) makes the watcher's writes fail so
+   messages after the Nth are dropped silently.
 3. Each notification line is one message:
    \`<ts> | <team> | <from> -> <to> | <body>\`. React as they arrive; reply with
    \`$SKILL_DIR/scripts/send.sh <team> <your-agent-name> <to_agent> "<message>"\`.

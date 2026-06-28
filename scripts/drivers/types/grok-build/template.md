@@ -88,6 +88,8 @@ Four possible outputs:
 - description: `agmsg inbox stream`
 - persistent: true
 
+Pass the `command` to the `monitor` tool **exactly as written** — do **not** append `| head`, `| tail`, any other pipe, or a redirection. Each watcher line is one message; a closed downstream pipe (e.g. `head` exiting after N lines) makes the watcher's writes fail and messages after the Nth are dropped silently.
+
 Each output line is one message: `<ts> | <team> | <from> -> <to> | <body>`. React to messages as they arrive; reply with `send.sh`. Launch it only once — if a watcher is already streaming, do not start a second one. In `turn`/`off` mode there is no watcher; skip this.
 
 **If no arguments provided (DEFAULT action — always do this when the command is invoked without arguments):**

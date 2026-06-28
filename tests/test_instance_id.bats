@@ -179,3 +179,110 @@ teardown() { teardown_test_env; }
   kill "$pb" 2>/dev/null || true
   wait "$pb" 2>/dev/null || true
 }
+
+# --- grok-build session binding (#245) ---
+#
+# A grok-build watcher launched by Grok's `monitor` tool gets an empty session id.
+# Keying on a bare throwaway id means no liveness gating, so the watcher lingers
+# forever after grok exits (the pid-91475-alive-3h orphan). These cover the
+# resolution that binds the watcher to a composite "<grok-session>.<grok-pid>"
+# (liveness-gated) for both the `--resume` and the fresh (no-resume) launch.
+
+@test "grok_newest_session_id: returns the newest UUID-form session dir (#245)" {
+  local sd="$HOME/.grok/sessions/proj"
+  mkdir -p "$sd/aaaa1111-1111-1111-1111-111111111111"
+  mkdir -p "$sd/bbbb2222-2222-2222-2222-222222222222"
+  mkdir -p "$sd/not-a-session"        # non-UUID dir must be ignored
+  touch -t 202601010000 "$sd/aaaa1111-1111-1111-1111-111111111111"
+  touch -t 202612310000 "$sd/bbbb2222-2222-2222-2222-222222222222"
+  run agmsg_grok_newest_session_id "$sd"
+  [ "$status" -eq 0 ]
+  [ "$output" = "bbbb2222-2222-2222-2222-222222222222" ]
+}
+
+@test "grok_newest_session_id: fails on a dir with no UUID session (#245)" {
+  local sd="$HOME/.grok/sessions/empty"
+  mkdir -p "$sd/scratch"
+  run agmsg_grok_newest_session_id "$sd"
+  [ "$status" -ne 0 ]
+}
+
+@test "grok_instance_id: a live grok --resume yields composite <id>.<pid> (#245)" {
+  local proj="/tmp/agmsg-grok-resume"
+  local enc; enc=$(printf '%s' "$proj" | sed 's#/#%2F#g')
+  # Distinct from the function's own local `gid`, which would otherwise shadow
+  # this value (dynamic scope) when the ps stub is called mid-resolution.
+  local gidval="019f0a8a-e25f-7f52-ac5c-543643b1755a"
+  mkdir -p "$HOME/.grok/sessions/$enc/$gidval"
+  # Fake a single live `grok --resume <gidval>` at pid 4242.
+  pgrep() { echo 4242; }
+  ps() { case "$*" in *4242*) echo "grok --resume $gidval" ;; esac; }
+  run agmsg_grok_instance_id "$proj"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$gidval.4242" ]
+  agmsg_instance_is_composite "$output"
+}
+
+@test "grok_instance_id: a fresh grok (no --resume) binds via ancestor + newest session (#245)" {
+  local proj="/tmp/agmsg-grok-fresh"
+  local enc; enc=$(printf '%s' "$proj" | sed 's#/#%2F#g')
+  local gid="019fabcd-1111-2222-3333-444455556666"
+  mkdir -p "$HOME/.grok/sessions/$enc/$gid"
+  # No `grok --resume` process; the fresh grok is found as the watcher's ancestor.
+  pgrep() { return 0; }
+  ps() { return 0; }
+  agmsg_grok_ancestor_pid() { echo 7777; }
+  run agmsg_grok_instance_id "$proj"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$gid.7777" ]
+  agmsg_instance_is_composite "$output"
+}
+
+@test "grok_instance_id: fails (caller falls back) when no live grok exists (#245)" {
+  local proj="/tmp/agmsg-grok-none"
+  local enc; enc=$(printf '%s' "$proj" | sed 's#/#%2F#g')
+  mkdir -p "$HOME/.grok/sessions/$enc/019f0049-95e5-7e70-af04-450a9c487da1"
+  pgrep() { return 0; }
+  ps() { return 0; }
+  agmsg_grok_ancestor_pid() { return 1; }   # watcher not under any grok
+  run agmsg_grok_instance_id "$proj"
+  [ "$status" -ne 0 ]
+}
+
+@test "grok_ancestor_pid: fails when no grok is in the ancestry (#245)" {
+  # The bats process tree has no grok ancestor (except if the suite itself is run
+  # under a grok session, which CI never is).
+  run agmsg_grok_ancestor_pid $$
+  [ "$status" -ne 0 ]
+}
+
+@test "args_is_grok_watcher: matches a real watcher invocation (#245)" {
+  local proj="/Users/x/projects/comms-agent"
+  agmsg_args_is_grok_watcher "bash /skills/agmsg/scripts/watch.sh sess.1 $proj grok-build" "$proj"
+}
+
+@test "args_is_grok_watcher: matches an empty-sid watcher (double space) (#245)" {
+  local proj="/Users/x/projects/comms-agent"
+  agmsg_args_is_grok_watcher "bash /skills/agmsg/scripts/watch.sh  $proj grok-build" "$proj"
+}
+
+@test "args_is_grok_watcher: excludes a shell that merely mentions the strings (#245)" {
+  # A process running `grep watch.sh ... grok-build` would be wrongly killed by a
+  # loose substring match. watch.sh is not the executed program here.
+  local proj="/Users/x/projects/comms-agent"
+  run agmsg_args_is_grok_watcher "/bin/zsh -c grep watch.sh foo grok-build $proj" "$proj"
+  [ "$status" -ne 0 ]
+}
+
+@test "args_is_grok_watcher: excludes a watcher for a different project (#245)" {
+  run agmsg_args_is_grok_watcher "bash /s/watch.sh sess.1 /other/proj grok-build" "/Users/x/comms-agent"
+  [ "$status" -ne 0 ]
+}
+
+@test "reap_orphan_grok_watchers: no-op and self-safe when nothing matches (#245)" {
+  # No grok-build watcher for this throwaway project exists; the reaper must not
+  # error and must never touch the caller (a pattern kill once wiped live ones).
+  run agmsg_reap_orphan_grok_watchers "/tmp/agmsg-no-such-project-xyz" $$
+  [ "$status" -eq 0 ]
+  kill -0 $$
+}
