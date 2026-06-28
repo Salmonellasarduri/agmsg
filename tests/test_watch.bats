@@ -395,6 +395,36 @@ _wait_pidfile() {
 # Empty session_id fallback (#236 grok monitor): Grok's `monitor` tool may run
 # the launch command with an empty $GROK_SESSION_ID, so watch.sh must self-assign
 # an id and start, not die with a "Usage" error (which left the monitor down).
+# No silent message loss across a burst (#245): the head-5 truncation bug had a
+# grok agent append `| head -5` to the monitor command, so after the 5th line the
+# consumer closed and later messages were dropped while the watermark advanced
+# past them. With the watcher streaming normally (no downstream truncation), a
+# burst of N>5 consecutive messages must ALL be delivered.
+@test "watch: delivers a burst of 8 consecutive messages without loss (#245)" {
+  skip_on_windows "watcher background launch under Git Bash (#182)"
+  local sid="sess-burst"
+  local out="$TEST_SKILL_DIR/burst.log"
+  local wm="$TEST_SKILL_DIR/run/watch.$(_iid "$sid").watermark"
+
+  AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" "$sid" "$PROJ" claude-code >"$out" 2>/dev/null &
+  local w=$!
+  _wait_for_file "$wm"          # ready to receive (watermark seeded)
+
+  local n
+  for n in 1 2 3 4 5 6 7 8; do
+    bash "$SCRIPTS/send.sh" team bob alice "BURST-$n" >/dev/null
+  done
+
+  # Wait for the last one to arrive, then assert EVERY message is present.
+  _wait_for_file_contains "$out" "BURST-8" || { kill "$w" 2>/dev/null || true; false; }
+  kill "$w" 2>/dev/null || true
+  wait "$w" 2>/dev/null || true
+
+  for n in 1 2 3 4 5 6 7 8; do
+    grep -q "BURST-$n" "$out"
+  done
+}
+
 @test "watch: empty session_id gets a generated fallback instead of a Usage error (#236)" {
   local out="$BATS_TEST_TMPDIR/empty-sid.out"
   AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" "" "$PROJ" claude-code alice >"$out" 2>&1 3>&- &
