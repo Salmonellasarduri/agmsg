@@ -74,7 +74,16 @@ EOF
 # agmsg — keep a real-time inbox watcher running
 
 You belong to one or more agmsg teams. Incoming messages are delivered in real
-time by a background watcher you launch with the \`monitor\` tool.
+time by the \`monitor\` tool, which streams each new message into THIS
+conversation as a notification.
+
+> Launch with the \`monitor\` tool ONLY. The \`monitor\` tool is the only thing
+> that surfaces watcher output to you. Do NOT start the watcher with
+> \`run_terminal_command\` (with or without \`background: true\`), and do NOT roll
+> your own \`tail -f\` of a log file. A terminal/background command writes the
+> stream to a log you never see, so messages keep arriving but you silently miss
+> every one of them — and stray watcher tasks pile up. If unsure which tool you
+> used, you used the wrong one unless it was literally \`monitor\`.
 
 At the start of each session (and any time no agmsg watcher is running), launch
 it once:
@@ -82,8 +91,9 @@ it once:
 1. Identify yourself if you have not already:
    \`$SKILL_DIR/scripts/whoami.sh '$project' $type\`
    It prints your \`agent=\` name and \`teams=\` list.
-2. Start the watcher with the \`monitor\` tool, persistent, so each new message
-   streams into the conversation as a notification:
+2. Start the watcher with the \`monitor\` tool (that exact tool — not
+   \`run_terminal_command\`), persistent, so each new message streams into the
+   conversation as a notification. Pass these three fields verbatim:
    - command: \`$SKILL_DIR/scripts/watch.sh "\$GROK_SESSION_ID" '$project' $type\`
    - description: \`agmsg inbox stream\`
    - persistent: true
@@ -91,7 +101,12 @@ it once:
    other pipe, or a redirection: each watcher line is one message, and a closed
    pipe (e.g. \`head\` exiting after N lines) makes the watcher's writes fail so
    messages after the Nth are dropped silently.
-3. Each notification line is one message:
+3. Verify it attached: a \`monitor\` task named \`agmsg inbox stream\` should now
+   be listed and streaming. If you do not see a live \`monitor\` task (e.g. you
+   ran the command as a terminal/background command by mistake), stop whatever
+   you started and relaunch via the \`monitor\` tool — otherwise no message will
+   ever reach you.
+4. Each notification line is one message:
    \`<ts> | <team> | <from> -> <to> | <body>\`. React as they arrive; reply with
    \`$SKILL_DIR/scripts/send.sh <team> <your-agent-name> <to_agent> "<message>"\`.
 

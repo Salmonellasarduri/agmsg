@@ -50,10 +50,11 @@ Four possible outputs:
                      A .grok/rules/agmsg.md rule has you self-check inbox.sh
                      each turn. Zero setup; no background watcher.
 
-       2) monitor — Real-time push via a background watcher
-                     Launches watch.sh through the `monitor` tool; each new
-                     message streams in as a notification. You launch the watcher
-                     explicitly (Grok hooks can't auto-start it at SessionStart).
+       2) monitor — Real-time push via the `monitor` tool
+                     Launches watch.sh through the `monitor` tool (NOT
+                     run_terminal_command); each new message streams in as a
+                     notification. You launch it explicitly (Grok hooks can't
+                     auto-start it at SessionStart).
 
        3) off     — No automatic delivery
                      Manual /__SKILL_NAME__ only.
@@ -89,6 +90,8 @@ Four possible outputs:
 - persistent: true
 
 Pass the `command` to the `monitor` tool **exactly as written** — do **not** append `| head`, `| tail`, any other pipe, or a redirection. Each watcher line is one message; a closed downstream pipe (e.g. `head` exiting after N lines) makes the watcher's writes fail and messages after the Nth are dropped silently.
+
+Launch it with the **`monitor` tool only** — **never** `run_terminal_command` (with or without `background: true`) and **never** a hand-rolled `tail -f` of a log. Only the `monitor` tool surfaces the stream into this conversation; a terminal/background launch writes to a log you never see, so messages keep arriving but you silently miss them (and stray watcher tasks pile up). After launching, confirm a live `monitor` task named `agmsg inbox stream` exists; if you don't see one (e.g. you launched it as a terminal/background command by mistake), stop that and relaunch via the `monitor` tool.
 
 Each output line is one message: `<ts> | <team> | <from> -> <to> | <body>`. React to messages as they arrive; reply with `send.sh`. Launch it only once — if a watcher is already streaming, do not start a second one. In `turn`/`off` mode there is no watcher; skip this.
 
