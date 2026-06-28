@@ -1,0 +1,20 @@
+{
+  "source": "/Users/koichi/Downloads/Generated Image June 28, 2026 - 3_21PM.jpg",
+  "source_size": [
+    1024,
+    1024
+  ],
+  "detected_full_bbox": [
+    108,
+    392,
+    916,
+    633
+  ],
+  "revision": "removed cast shadows and transparent wordmark counters; retained white ag inside the icon mark",
+  "usage_notes": [
+    "Use the original navy logo on white or light backgrounds.",
+    "Cast shadows outside the logo have been removed.",
+    "Wordmark counters are transparent cutouts.",
+    "SVG files are convenience wrappers around embedded raster PNG artwork, not redrawn vector paths."
+  ]
+}
