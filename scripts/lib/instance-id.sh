@@ -167,29 +167,42 @@ agmsg_grok_instance_id() {
   sess_dir="$HOME/.grok/sessions/$enc"
   [ -d "$sess_dir" ] || return 1
 
-  # 1) Precise: a live `grok --resume <id>` whose <id> is in this project's dir.
-  for gp in $(pgrep -x grok 2>/dev/null || true); do
-    gargs=$(ps -o args= -p "$gp" 2>/dev/null || true)
-    case "$gargs" in *--resume*) ;; *) continue ;; esac
-    gid=$(printf '%s' "$gargs" | sed -n 's/.*--resume[ =]*\([0-9A-Za-z][0-9A-Za-z-]*\).*/\1/p')
-    [ -n "$gid" ] || continue
-    # Confirm this session belongs to the project we're watching.
-    if [ -e "$sess_dir/$gid" ]; then
-      printf '%s.%s' "$gid" "$gp"
-      return 0
-    fi
-  done
-
-  # 2) Fresh grok (no --resume): bind to the ancestor grok that launched this
-  #    watcher, paired with the project's newest session id.
+  # 1) Primary: bind to the grok process that actually launched THIS watcher (its
+  #    ancestor). This is correct even when several grok sessions share the same
+  #    project — a plain `pgrep -x grok` scan could otherwise bind watcher B to
+  #    watcher A's grok, colliding their pidfile/watermark and liveness. If the
+  #    ancestor grok was started with `--resume <id>`, key on that id; otherwise
+  #    (a fresh grok) key on the project's newest session id.
   grok_pid=$(agmsg_grok_ancestor_pid 2>/dev/null || true)
   if [ -n "$grok_pid" ]; then
-    gid=$(agmsg_grok_newest_session_id "$sess_dir" 2>/dev/null || true)
+    gargs=$(ps -o args= -p "$grok_pid" 2>/dev/null || true)
+    gid=""
+    case "$gargs" in
+      *--resume*) gid=$(printf '%s' "$gargs" | sed -n 's/.*--resume[ =]*\([0-9A-Za-z][0-9A-Za-z-]*\).*/\1/p') ;;
+    esac
+    # A resume id must belong to this project's session dir; else fall back to
+    # the newest session id under it.
+    [ -n "$gid" ] && [ ! -e "$sess_dir/$gid" ] && gid=""
+    [ -n "$gid" ] || gid=$(agmsg_grok_newest_session_id "$sess_dir" 2>/dev/null || true)
     if [ -n "$gid" ]; then
       printf '%s.%s' "$gid" "$grok_pid"
       return 0
     fi
   fi
+
+  # 2) Fallback: the ancestor grok could not be resolved (a detached watcher with
+  #    no grok in its process tree). Best-effort — find any live `grok --resume
+  #    <id>` whose <id> is in this project's dir.
+  for gp in $(pgrep -x grok 2>/dev/null || true); do
+    gargs=$(ps -o args= -p "$gp" 2>/dev/null || true)
+    case "$gargs" in *--resume*) ;; *) continue ;; esac
+    gid=$(printf '%s' "$gargs" | sed -n 's/.*--resume[ =]*\([0-9A-Za-z][0-9A-Za-z-]*\).*/\1/p')
+    [ -n "$gid" ] || continue
+    if [ -e "$sess_dir/$gid" ]; then
+      printf '%s.%s' "$gid" "$gp"
+      return 0
+    fi
+  done
 
   return 1
 }
@@ -207,6 +220,10 @@ agmsg_grok_instance_id() {
 # loose substring match would wrongly flag and kill). Confirms watch.sh is the
 # executed script (argv[0] or argv[1] basename) and grok-build / the project are
 # positional args, not text inside a `-c` wrapper.
+#
+# Word-splits the ps args string, so a project path containing whitespace will
+# not match and its orphan watcher would simply be left alone (fail-closed — the
+# bias is toward never killing the wrong process, never toward a stray kill).
 agmsg_args_is_grok_watcher() {
   local args="$1" project="$2" a1 a2 saw_type=0 saw_proj=0 w
   set -f

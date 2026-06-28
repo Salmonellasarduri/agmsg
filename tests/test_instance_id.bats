@@ -207,14 +207,31 @@ teardown() { teardown_test_env; }
   [ "$status" -ne 0 ]
 }
 
-@test "grok_instance_id: a live grok --resume yields composite <id>.<pid> (#245)" {
+@test "grok_instance_id: prefers the watcher's ancestor grok over other live groks (#245)" {
+  # Two live `grok --resume` sessions share this project; the watcher must bind
+  # to ITS ancestor grok (2222 / gidB), not whichever pgrep lists first.
+  local proj="/tmp/agmsg-grok-multi"
+  local enc; enc=$(printf '%s' "$proj" | sed 's#/#%2F#g')
+  local gidA="019faaaa-1111-1111-1111-111111111111"
+  local gidB="019fbbbb-2222-2222-2222-222222222222"
+  mkdir -p "$HOME/.grok/sessions/$enc/$gidA" "$HOME/.grok/sessions/$enc/$gidB"
+  pgrep() { printf '1111\n2222\n'; }
+  ps() { case "$*" in *1111*) echo "grok --resume $gidA" ;; *2222*) echo "grok --resume $gidB" ;; esac; }
+  agmsg_grok_ancestor_pid() { echo 2222; }
+  run agmsg_grok_instance_id "$proj"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$gidB.2222" ]
+}
+
+@test "grok_instance_id: a live grok --resume yields composite <id>.<pid> via fallback (#245)" {
+  # Ancestor unresolvable (detached watcher) -> the pgrep fallback finds the live
+  # `grok --resume` for this project. Distinct var name from the function's own
+  # local `gid`, which would otherwise shadow it (dynamic scope) in the ps stub.
   local proj="/tmp/agmsg-grok-resume"
   local enc; enc=$(printf '%s' "$proj" | sed 's#/#%2F#g')
-  # Distinct from the function's own local `gid`, which would otherwise shadow
-  # this value (dynamic scope) when the ps stub is called mid-resolution.
   local gidval="019f0a8a-e25f-7f52-ac5c-543643b1755a"
   mkdir -p "$HOME/.grok/sessions/$enc/$gidval"
-  # Fake a single live `grok --resume <gidval>` at pid 4242.
+  agmsg_grok_ancestor_pid() { return 1; }
   pgrep() { echo 4242; }
   ps() { case "$*" in *4242*) echo "grok --resume $gidval" ;; esac; }
   run agmsg_grok_instance_id "$proj"
