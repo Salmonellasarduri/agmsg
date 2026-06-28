@@ -50,11 +50,12 @@ Four possible outputs:
                      A .grok/rules/agmsg.md rule has you self-check inbox.sh
                      each turn. Zero setup; no background watcher.
 
-       2) monitor — Real-time push via the `monitor` tool
+       2) monitor — Real-time push via the `monitor` tool (BETA)
                      Launches watch.sh through the `monitor` tool (NOT
                      run_terminal_command); each new message streams in as a
                      notification. You launch it explicitly (Grok hooks can't
-                     auto-start it at SessionStart).
+                     auto-start it at SessionStart). BETA: still stabilizing —
+                     turn mode is the stable default.
 
        3) off     — No automatic delivery
                      Manual /__SKILL_NAME__ only.
@@ -65,7 +66,7 @@ Four possible outputs:
      - **Wait for the user's answer before proceeding.** Empty input means `1` (turn).
      - Map the chosen number to a mode (`1`→`turn`, `2`→`monitor`, `3`→`off`) and run:
        `~/.agents/skills/__SKILL_NAME__/scripts/delivery.sh set <mode> grok-build "$(pwd)"`
-     - If you chose `monitor`, read the `AGMSG-DIRECTIVE` block that `delivery.sh` prints and follow it now: invoke the `monitor` tool with the given `command` / `description` / `persistent: true` so the watcher starts streaming into this session. `both` is not supported.
+     - If you chose `monitor`, tell the user it is a **BETA** that is still stabilizing (turn mode is the stable default). Then read the `AGMSG-DIRECTIVE` block that `delivery.sh` prints and follow it now: invoke the `monitor` tool with the given `command` / `description` / `persistent: true` so the watcher starts streaming into this session. `both` is not supported.
 
   6. Then check inbox for the newly joined team.
 
