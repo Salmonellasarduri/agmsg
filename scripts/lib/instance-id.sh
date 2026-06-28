@@ -225,12 +225,17 @@ agmsg_grok_instance_id() {
 # not match and its orphan watcher would simply be left alone (fail-closed — the
 # bias is toward never killing the wrong process, never toward a stray kill).
 agmsg_args_is_grok_watcher() {
-  local args="$1" project="$2" a1 a2 saw_type=0 saw_proj=0 w
+  local args="$1" project="${2:-}" a1 a2 saw_type=0 saw_proj=0 w
+  [ -n "$args" ] || return 1
   set -f
   # shellcheck disable=SC2086
   set -- $args
   set +f
-  a1="${1##*/}"; a2="${2##*/}"
+  # Guard every positional access: callers run under `set -u`, and ps lists
+  # kernel/system processes with empty args, so $1/$2 may be unset here.
+  [ "$#" -ge 1 ] || return 1
+  a1="${1##*/}"
+  a2=""; [ "$#" -ge 2 ] && a2="${2##*/}"
   # watch.sh must be the program: `watch.sh ...` or `<shell> watch.sh ...`.
   [ "$a1" = "watch.sh" ] || [ "$a2" = "watch.sh" ] || return 1
   for w in "$@"; do
@@ -248,6 +253,7 @@ agmsg_reap_orphan_grok_watchers() {
   # empty IFS would put the whole line in $pid and match nothing.
   while read -r pid args; do
     case "$pid" in ''|*[!0-9]*) continue ;; esac
+    [ -n "${args:-}" ] || continue
     [ "$pid" = "$self" ] && continue
     agmsg_args_is_grok_watcher "$args" "$project" || continue
     # A live grok ancestor means the watcher is still owned by a running grok.

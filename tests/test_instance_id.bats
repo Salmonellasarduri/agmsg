@@ -296,6 +296,29 @@ teardown() { teardown_test_env; }
   [ "$status" -ne 0 ]
 }
 
+@test "args_is_grok_watcher: set -u safe on empty / short args (#245)" {
+  # watch.sh runs under set -u; ps lists kernel procs with empty args, so the
+  # matcher must not trip nounset on unset positional params.
+  run bash -u -c "source '$SCRIPTS/lib/instance-id.sh'
+    agmsg_args_is_grok_watcher '' '/p' && echo unexpected1
+    agmsg_args_is_grok_watcher 'bash' '/p' && echo unexpected2
+    echo OK"
+  [ "$status" -eq 0 ]
+  [ "$output" = "OK" ]
+}
+
+@test "reap_orphan_grok_watchers: survives set -u scanning the real ps table (#245)" {
+  # Regression for a startup crash: under set -u the reaper scanned ps output
+  # that includes empty-args processes and tripped nounset, killing the watcher
+  # before it armed. It must complete and leave the caller alive.
+  run bash -u -c "SKILL_DIR='$SKILL_DIR'
+    source '$SCRIPTS/lib/instance-id.sh'
+    agmsg_reap_orphan_grok_watchers '/tmp/agmsg-no-such-project-xyz' \$\$
+    echo OK"
+  [ "$status" -eq 0 ]
+  [ "$output" = "OK" ]
+}
+
 @test "reap_orphan_grok_watchers: no-op and self-safe when nothing matches (#245)" {
   # No grok-build watcher for this throwaway project exists; the reaper must not
   # error and must never touch the caller (a pattern kill once wiped live ones).
