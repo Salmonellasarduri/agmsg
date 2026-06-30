@@ -110,6 +110,18 @@ teardown() {
   [[ "$output" =~ "drv two" ]]
 }
 
+@test "storage use: sets a team's backend via the config-write seam" {
+  source "$SCRIPTS/lib/storage.sh"
+  unset AGMSG_STORAGE_PATH
+  mkdir -p "$TEST_SKILL_DIR/teams/ut"
+  printf '%s\n' '{"name":"ut","agents":{}}' > "$TEST_SKILL_DIR/teams/ut/config.json"
+
+  bash "$SCRIPTS/storage.sh" use jsonl ut
+  [ "$(agmsg_team_storage_driver ut)" = "jsonl" ]
+  # existing config keys are preserved (json_set, not overwrite)
+  [ "$(agmsg_sqlite_mem "SELECT json_extract(readfile('$TEST_SKILL_DIR/teams/ut/config.json'),'\$.name');")" = "ut" ]
+}
+
 @test "storage driver (jsonl): per-team send/list/mark/history via the facade" {
   if ! command -v jq >/dev/null 2>&1; then skip "jq not installed"; fi
   unset AGMSG_STORAGE_PATH
