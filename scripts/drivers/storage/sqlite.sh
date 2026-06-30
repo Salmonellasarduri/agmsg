@@ -12,6 +12,9 @@
 # function takes the <team> and resolves that team's store, so a per-team
 # backend and the shared global store are handled identically.
 
+# storage_exists <team> — has this team's store been initialized?
+storage_exists() { [ -f "$(agmsg_team_db_path "$1")" ]; }
+
 # storage_send <team> <from> <to> <body>
 storage_send() {
   local team="$1" from="$2" to="$3" body="$4" db init insert

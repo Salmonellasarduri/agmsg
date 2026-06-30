@@ -110,6 +110,39 @@ teardown() {
   [[ "$output" =~ "drv two" ]]
 }
 
+@test "storage driver (jsonl): per-team send/list/mark/history via the facade" {
+  if ! command -v jq >/dev/null 2>&1; then skip "jq not installed"; fi
+  unset AGMSG_STORAGE_PATH
+  mkdir -p "$TEST_SKILL_DIR/teams/jt"
+  printf '%s\n' '{"name":"jt","storage":"jsonl"}' > "$TEST_SKILL_DIR/teams/jt/config.json"
+  local d="$TEST_SKILL_DIR/db/teams/jt"
+
+  bash "$SCRIPTS/send.sh" jt alice bob "json one"
+  bash "$SCRIPTS/send.sh" jt alice bob "json two"
+  # content lands in the team's jsonl log — NOT a sqlite db
+  [ -f "$d/messages.jsonl" ]
+  [ ! -f "$d/messages.db" ]
+  [ "$(wc -l < "$d/messages.jsonl" | tr -d ' ')" -eq 2 ]
+
+  run bash "$SCRIPTS/inbox.sh" jt bob
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "json one" ]]
+  [[ "$output" =~ "json two" ]]
+  # read-state is append-only message_read events
+  [ -f "$d/events.jsonl" ]
+  [ "$(grep -c message_read "$d/events.jsonl")" -eq 2 ]
+
+  # re-read: nothing unread now
+  run bash "$SCRIPTS/inbox.sh" jt bob
+  [[ "$output" =~ "No new messages" ]]
+
+  # history shows both
+  run bash "$SCRIPTS/history.sh" jt
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "json one" ]]
+  [[ "$output" =~ "json two" ]]
+}
+
 # --- agmsg_db_path() Windows path conversion (#197) ---
 
 @test "storage: agmsg_db_path applies cygpath -m on Windows so sqlite3.exe can open it (#197)" {
