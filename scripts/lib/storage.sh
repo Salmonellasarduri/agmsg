@@ -120,6 +120,23 @@ agmsg_team_db_path() {
 # the storage drivers and any direct call site that interpolates into SQL.
 agmsg_sqlesc() { printf %s "$1" | sed "s/'/''/g"; }
 
+# Set <team>'s storage backend in its config (the "storage" key). This is the
+# SINGLE writer of the team->driver mapping — the seam that 1.2 repoints to a
+# DB write when teams/ moves into the (remote-capable) control store. Keep all
+# driver-selection writes here. Mirrors join.sh's json_set config update.
+agmsg_team_set_storage() {
+  local team="$1" driver="$2" dir cfg updated
+  dir="$(agmsg_teams_dir)/$team"; cfg="$dir/config.json"
+  mkdir -p "$dir"
+  if [ -f "$cfg" ]; then
+    updated="$(agmsg_sqlite_mem "SELECT json_set(CAST(readfile('$(agmsg_sql_readfile_path "$cfg")') AS TEXT), '\$.storage', '$(agmsg_sqlesc "$driver")');")"
+  else
+    updated="$(agmsg_sqlite_mem "SELECT json_object('name','$(agmsg_sqlesc "$team")','storage','$(agmsg_sqlesc "$driver")');")"
+  fi
+  [ -n "$updated" ] || return 1
+  printf '%s\n' "$updated" > "$cfg"
+}
+
 # --- Storage driver facade ---------------------------------------------------
 # Load the active storage driver for <team> and bring its storage_* functions
 # (storage_send / storage_list_unread / storage_mark_read / storage_history)
