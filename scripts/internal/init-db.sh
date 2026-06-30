@@ -3,8 +3,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/../lib/storage.sh"
-DB="$(agmsg_db_path)"
-DB_DIR="$(dirname "$DB")"
+# Optional <team>: initialize that team's per-team store. Empty (the default,
+# back-compatible) resolves to the shared global store.
+TEAM="${1:-}"
+DB="$(agmsg_team_db_path "$TEAM")"
+DB_DIR="$(agmsg_team_storage_dir "$TEAM")"
 mkdir -p "$DB_DIR"
 
 # Idempotent and safe to run concurrently. When a leader fans a job out to N

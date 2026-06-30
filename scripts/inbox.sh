@@ -14,7 +14,7 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/storage.sh"
-DB="$(agmsg_db_path)"
+DB="$(agmsg_team_db_path "$TEAM")"
 
 if [ ! -f "$DB" ]; then
   if [ "$QUIET" = true ]; then exit 0; fi

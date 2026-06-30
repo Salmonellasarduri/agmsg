@@ -10,9 +10,12 @@ BODY="${4:?Missing message body}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/storage.sh"
-DB="$(agmsg_db_path)"
+# Team-aware store: a team with a per-team backend (teams/<team>/config.json
+# "storage") writes to its own store; otherwise this resolves to the global
+# store unchanged.
+DB="$(agmsg_team_db_path "$TEAM")"
 
-[ -f "$DB" ] || bash "$SCRIPT_DIR/internal/init-db.sh" >/dev/null
+[ -f "$DB" ] || bash "$SCRIPT_DIR/internal/init-db.sh" "$TEAM" >/dev/null
 
 # Escape EVERY interpolated value as a SQL string literal, not just body: a
 # team/agent name containing a single quote would otherwise break the INSERT
@@ -30,7 +33,7 @@ INSERT="INSERT INTO messages (team, from_agent, to_agent, body) VALUES ('$(_agms
 # OS command-line limit (the "Argument list too long" crash).
 if ! printf '%s
 ' "$INSERT" | agmsg_sqlite "$DB" 2>/dev/null; then
-  bash "$SCRIPT_DIR/internal/init-db.sh" >/dev/null
+  bash "$SCRIPT_DIR/internal/init-db.sh" "$TEAM" >/dev/null
   printf '%s
 ' "$INSERT" | agmsg_sqlite "$DB"
 fi

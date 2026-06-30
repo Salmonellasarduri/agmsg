@@ -113,10 +113,9 @@ fi
 mkdir -p "$SKILL_DIR/run"
 touch "$MARKER"
 
-# Check for unread messages and mark as read
-DB="$(agmsg_db_path)"
-if [ ! -f "$DB" ]; then exit 0; fi
-
+# Check for unread messages and mark as read. The store is resolved PER TEAM
+# inside the loop (team-aware): a team with a per-team backend reads its own
+# store; default teams all resolve to the shared global store (unchanged).
 OUTPUT=""
 IFS=',' read -ra TEAM_LIST <<< "$TEAMS"
 for team in "${TEAM_LIST[@]}"; do
@@ -135,6 +134,9 @@ for team in "${TEAM_LIST[@]}"; do
   case "$state" in
     other:*) continue ;;
   esac
+
+  DB="$(agmsg_team_db_path "$team")"
+  [ -f "$DB" ] || continue
 
   RESULT=$(agmsg_sqlite "$DB" "
     SELECT from_agent || char(31) || replace(replace(body, char(10), '\n'), char(9), '\t') || char(31) || created_at
