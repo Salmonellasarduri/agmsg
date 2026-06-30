@@ -17,17 +17,10 @@ if [ ! -f "$DB" ]; then
   exit 0
 fi
 
-if [ -n "$AGENT" ]; then
-  WHERE="WHERE team='$TEAM' AND (from_agent='$AGENT' OR to_agent='$AGENT')"
-else
-  WHERE="WHERE team='$TEAM'"
-fi
-
-# Escape newlines/tabs in body, use unit separator between fields
-RESULT=$(agmsg_sqlite "$DB" "
-  SELECT from_agent || char(31) || to_agent || char(31) || replace(replace(body, char(10), '\n'), char(9), '\t') || char(31) || created_at || char(31) || CASE WHEN read_at IS NULL THEN '●' ELSE '○' END
-  FROM messages $WHERE ORDER BY created_at DESC LIMIT $LIMIT;
-")
+# Read history through the team's storage backend (sqlite default). The driver
+# returns newest-first records: from <US> to <US> body <US> ts <US> status.
+agmsg_storage_load "$TEAM"
+RESULT=$(storage_history "$TEAM" "$AGENT" "$LIMIT")
 
 if [ -z "$RESULT" ]; then
   echo "No message history."

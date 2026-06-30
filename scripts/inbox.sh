@@ -22,12 +22,9 @@ if [ ! -f "$DB" ]; then
   exit 0
 fi
 
-# Get unread messages — escape newlines/tabs in body to keep one record per line
-UNREAD=$(agmsg_sqlite "$DB" "
-  SELECT from_agent || char(31) || replace(replace(body, char(10), '\n'), char(9), '\t') || char(31) || created_at
-  FROM messages WHERE team='$TEAM' AND to_agent='$AGENT' AND read_at IS NULL
-  ORDER BY created_at ASC;
-")
+# Read unread + mark through the team's storage backend (sqlite default).
+agmsg_storage_load "$TEAM"
+UNREAD=$(storage_list_unread "$TEAM" "$AGENT")
 
 if [ -z "$UNREAD" ]; then
   if [ "$QUIET" = true ]; then exit 0; fi
@@ -44,15 +41,6 @@ while IFS=$'\x1f' read -r from body ts; do
 done <<< "$UNREAD"
 echo ""
 
-# Mark as read (non-fatal — may fail in sandboxed environments).
-# Dual-write: append message_read events (append-only read-state log) for the
-# messages being read, AND keep updating read_at for backward compatibility.
-# The events INSERT must run BEFORE the UPDATE so `read_at IS NULL` still
-# selects the just-read set.
-agmsg_sqlite "$DB" "
-INSERT INTO events (type, team, agent, msg_id)
-  SELECT 'message_read', team, to_agent, id FROM messages
-  WHERE team='$TEAM' AND to_agent='$AGENT' AND read_at IS NULL;
-UPDATE messages SET read_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
-  WHERE team='$TEAM' AND to_agent='$AGENT' AND read_at IS NULL;
-" 2>/dev/null || true
+# Mark as read (non-fatal — may fail in sandboxed environments). The driver
+# dual-writes: append-only message_read events + read_at for back-compat.
+storage_mark_read "$TEAM" "$AGENT"
