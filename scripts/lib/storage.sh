@@ -116,6 +116,34 @@ agmsg_team_db_path() {
   printf '%s\n' "$db"
 }
 
+# Escape a value as a SQL string literal (double every single quote). Shared by
+# the storage drivers and any direct call site that interpolates into SQL.
+agmsg_sqlesc() { printf %s "$1" | sed "s/'/''/g"; }
+
+# --- Storage driver facade ---------------------------------------------------
+# Load the active storage driver for <team> and bring its storage_* functions
+# (storage_send / storage_list_unread / storage_mark_read / storage_history)
+# into scope. The backend is the team's configured driver (teams/<team>/config
+# "storage"), defaulting to the bundled "sqlite". Call this immediately before
+# the storage_* calls for a given team; switching teams re-sources as needed
+# (sourcing a driver file is idempotent). Drivers live under
+# scripts/drivers/storage/<name>.sh and rely on the helpers above.
+_AGMSG_LOADED_DRIVER=""
+agmsg_storage_load() {
+  local team="$1" name file
+  name="$(agmsg_team_storage_driver "$team")"
+  [ -n "$name" ] && [ "$name" != "null" ] || name="sqlite"
+  [ "$_AGMSG_LOADED_DRIVER" = "$name" ] && return 0
+  file="$(agmsg_skill_dir)/scripts/drivers/storage/$name.sh" || return 1
+  if [ ! -f "$file" ]; then
+    echo "agmsg: storage driver '$name' not found ($file)" >&2
+    return 1
+  fi
+  # shellcheck disable=SC1090
+  . "$file"
+  _AGMSG_LOADED_DRIVER="$name"
+}
+
 # Run sqlite3 against the message store with a busy_timeout, so a writer that
 # finds the DB locked WAITS for it instead of failing immediately with
 # SQLITE_BUSY. WAL (set at init) lets readers and a single writer coexist, but
