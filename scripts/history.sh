@@ -15,7 +15,7 @@ case "$LIMIT" in ''|*[!0-9]*) LIMIT=20 ;; esac
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/storage.sh"
-DB="$(agmsg_db_path)"
+DB="$(agmsg_team_db_path "$TEAM")"
 
 if [ ! -f "$DB" ]; then
   echo "No messages (DB not initialized)"

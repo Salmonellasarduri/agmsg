@@ -57,6 +57,25 @@ teardown() {
   [ "$(agmsg_team_db_path jt)" = "$BATS_TEST_TMPDIR/store/messages.db" ]
 }
 
+@test "storage: a per-team backend isolates a team's messages to its own store" {
+  unset AGMSG_STORAGE_PATH
+  mkdir -p "$TEST_SKILL_DIR/teams/jt"
+  printf '%s\n' '{"name":"jt","storage":"sqlite"}' > "$TEST_SKILL_DIR/teams/jt/config.json"
+
+  # send + read round-trip through the team's OWN store
+  bash "$SCRIPTS/send.sh" jt alice bob "per-team hi"
+  [ -f "$TEST_SKILL_DIR/db/teams/jt/messages.db" ]
+  run bash "$SCRIPTS/inbox.sh" jt bob
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "per-team hi" ]]
+
+  # the shared global store holds no rows for this team
+  local g="$TEST_SKILL_DIR/db/messages.db"
+  if [ -f "$g" ]; then
+    [ "$(sqlite3 "$g" "SELECT COUNT(*) FROM messages WHERE team='jt';")" -eq 0 ]
+  fi
+}
+
 # --- agmsg_db_path() Windows path conversion (#197) ---
 
 @test "storage: agmsg_db_path applies cygpath -m on Windows so sqlite3.exe can open it (#197)" {
