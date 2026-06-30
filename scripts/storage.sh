@@ -41,6 +41,32 @@ cmd_use() {
   echo "team '$team' storage -> $driver"
 }
 
+# Move a team's messages + read-state to <target>. Order is chosen so the
+# export file is always a usable backup if anything later fails:
+#   export(current) -> purge(current) -> flip mapping -> import(target)
+cmd_migrate() {
+  local team="$1" target="$2" current backup
+  current="$(_resolve_driver "$team")"
+  if [ "$current" = "$target" ]; then
+    echo "team '$team' already on $target"
+    return 0
+  fi
+
+  agmsg_storage_load "$team"                      # current backend
+  backup="$(agmsg_team_storage_dir "$team")/migrate-${current}-to-${target}.jsonl"
+  mkdir -p "$(dirname "$backup")"
+  storage_export "$team" > "$backup"
+
+  storage_purge "$team"                           # config still = current
+  agmsg_team_set_storage "$team" "$target"        # flip mapping (seam)
+
+  _AGMSG_LOADED_DRIVER=""                          # force reload of the target
+  agmsg_storage_load "$team"
+  storage_import "$team" < "$backup"
+
+  echo "team '$team' migrated $current -> $target (backup: $backup)"
+}
+
 SUB="${1:-}"; [ -n "$SUB" ] || { usage; exit 1; }
 shift
 DRIVER="${1:-}"; [ -n "$DRIVER" ] || { usage; exit 1; }
@@ -55,8 +81,11 @@ case "$SUB" in
     fi
     ;;
   migrate)
-    echo "storage.sh migrate: not yet implemented" >&2
-    exit 1
+    if [ -n "$TEAM" ]; then
+      cmd_migrate "$TEAM" "$DRIVER"
+    else
+      for t in $(_all_teams); do cmd_migrate "$t" "$DRIVER"; done
+    fi
     ;;
   *)
     usage; exit 1

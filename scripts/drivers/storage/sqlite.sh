@@ -62,6 +62,56 @@ UPDATE messages SET read_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
 " 2>/dev/null || true
 }
 
+# storage_export <team>
+# Portable dump: one JSON object per message — {id,from,to,body,at,read_by:[agent...]}
+# (read_by = the recipient when the message has been read). Used by migrate.
+storage_export() {
+  local team="$1" db tl
+  db="$(agmsg_team_db_path "$team")"
+  [ -f "$db" ] || return 0
+  tl="$(agmsg_sqlesc "$team")"
+  agmsg_sqlite "$db" "
+    SELECT json_object('id',CAST(id AS TEXT),'from',from_agent,'to',to_agent,'body',body,'at',created_at,
+      'read_by', CASE WHEN read_at IS NOT NULL THEN json_array(to_agent) ELSE json_array() END)
+    FROM messages WHERE team='$tl' ORDER BY id;
+  "
+}
+
+# storage_import <team>  (reads the export JSONL on stdin)
+storage_import() {
+  local team="$1" db init line from to body at readn ra
+  db="$(agmsg_team_db_path "$team")"
+  init="$(agmsg_skill_dir)/scripts/internal/init-db.sh"
+  [ -f "$db" ] || bash "$init" "$team" >/dev/null
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    # jq @sh safely shell-quotes each field for eval; re-escaped for SQL below.
+    eval "$(printf '%s' "$line" | jq -r '@sh "from=\(.from) to=\(.to) body=\(.body) at=\(.at) readn=\(.read_by|length|tostring)"')"
+    ra="NULL"
+    [ "${readn:-0}" -gt 0 ] && ra="'$(agmsg_sqlesc "$at")'"
+    agmsg_sqlite "$db" "INSERT INTO messages (team,from_agent,to_agent,body,created_at,read_at) VALUES ('$(agmsg_sqlesc "$team")','$(agmsg_sqlesc "$from")','$(agmsg_sqlesc "$to")','$(agmsg_sqlesc "$body")','$(agmsg_sqlesc "$at")', $ra);"
+  done
+}
+
+# storage_purge <team> — remove this team's data from the CURRENT store. On the
+# shared global store, delete only this team's rows; on a dedicated per-team
+# store, remove its files. Call BEFORE flipping the team->driver mapping.
+storage_purge() {
+  local team="$1" dir global db tl
+  dir="$(agmsg_team_storage_dir "$team")"
+  global="$(agmsg_storage_dir)"
+  tl="$(agmsg_sqlesc "$team")"
+  if [ "$dir" = "$global" ]; then
+    db="$(agmsg_team_db_path "$team")"
+    if [ -f "$db" ]; then
+      agmsg_sqlite "$db" "DELETE FROM messages WHERE team='$tl';" 2>/dev/null || true
+      agmsg_sqlite "$db" "DELETE FROM events WHERE team='$tl';" 2>/dev/null || true
+    fi
+  else
+    rm -f "$dir/messages.db" "$dir/messages.db-wal" "$dir/messages.db-shm"
+  fi
+}
+
 # storage_history <team> <agent-or-empty> <limit>
 # Emits one record per message: from <US> to <US> body <US> created_at <US> status
 # (newest first; ● = unread, ○ = read). <limit> must be a validated integer.
