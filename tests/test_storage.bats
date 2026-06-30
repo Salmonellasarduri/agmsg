@@ -76,6 +76,40 @@ teardown() {
   fi
 }
 
+# --- storage driver facade + sqlite driver (phase 2b) ---
+
+@test "storage driver: defaults to sqlite when the team has no backend set" {
+  source "$SCRIPTS/lib/storage.sh"
+  export AGMSG_STORAGE_PATH="$BATS_TEST_TMPDIR/store"
+  agmsg_storage_load noconf
+  [ "$_AGMSG_LOADED_DRIVER" = "sqlite" ]
+  [ -n "$(type -t storage_send)" ]
+}
+
+@test "storage driver (sqlite): facade send/list/mark/history round-trip" {
+  source "$SCRIPTS/lib/storage.sh"
+  export AGMSG_STORAGE_PATH="$BATS_TEST_TMPDIR/store"
+  agmsg_storage_load t
+
+  storage_send t alice bob "drv one"
+  storage_send t alice bob "drv two"
+
+  run storage_list_unread t bob
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c 'drv ')" -eq 2 ]
+
+  storage_mark_read t bob
+  run storage_list_unread t bob
+  [ -z "$output" ]
+  # read-state recorded as append-only events (dual-write)
+  [ "$(sqlite3 "$AGMSG_STORAGE_PATH/messages.db" "SELECT COUNT(*) FROM events WHERE type='message_read';")" -eq 2 ]
+
+  run storage_history t "" 20
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "drv one" ]]
+  [[ "$output" =~ "drv two" ]]
+}
+
 # --- agmsg_db_path() Windows path conversion (#197) ---
 
 @test "storage: agmsg_db_path applies cygpath -m on Windows so sqlite3.exe can open it (#197)" {
