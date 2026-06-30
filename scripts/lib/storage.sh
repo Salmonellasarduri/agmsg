@@ -15,26 +15,31 @@
 # full order is env > config > default. Keep that logic here so call sites
 # stay unchanged.
 
-# Echo the directory that holds (or will hold) the message store.
+# Resolve the skill directory — the install root that holds db/ and teams/.
+agmsg_skill_dir() {
+  local lib_dir
+  if [ -n "${BASH_SOURCE[0]:-}" ]; then
+    lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    (cd "$lib_dir/../.." && pwd)
+  elif [ -n "${SKILL_DIR:-}" ]; then
+    # BASH_SOURCE empty — e.g. Claude Code sandbox runs Bash via pipe/eval
+    # so BASH_SOURCE is not populated. Fall back to SKILL_DIR which the
+    # calling script resolves from $0 (which IS populated correctly).
+    printf '%s\n' "$SKILL_DIR"
+  else
+    echo "Error: cannot resolve skill dir (BASH_SOURCE and SKILL_DIR both empty)" >&2
+    return 1
+  fi
+}
+
+# Echo the directory that holds (or will hold) the (default/global) message store.
 agmsg_storage_dir() {
   if [ -n "${AGMSG_STORAGE_PATH:-}" ]; then
     # Strip a single trailing slash for a stable join with the filename.
     printf '%s\n' "${AGMSG_STORAGE_PATH%/}"
     return
   fi
-  local lib_dir skill_dir
-  if [ -n "${BASH_SOURCE[0]:-}" ]; then
-    lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    skill_dir="$(cd "$lib_dir/../.." && pwd)"
-  elif [ -n "${SKILL_DIR:-}" ]; then
-    # BASH_SOURCE empty — e.g. Claude Code sandbox runs Bash via pipe/eval
-    # so BASH_SOURCE is not populated. Fall back to SKILL_DIR which the
-    # calling script resolves from $0 (which IS populated correctly).
-    skill_dir="$SKILL_DIR"
-  else
-    echo "Error: cannot resolve storage dir (BASH_SOURCE and SKILL_DIR both empty)" >&2
-    return 1
-  fi
+  local skill_dir; skill_dir="$(agmsg_skill_dir)" || return 1
   printf '%s\n' "$skill_dir/db"
 }
 
@@ -49,6 +54,62 @@ agmsg_storage_dir() {
 agmsg_db_path() {
   local db
   db="$(agmsg_storage_dir)/messages.db"
+  if command -v cygpath >/dev/null 2>&1; then
+    db=$(cygpath -m "$db" 2>/dev/null || printf '%s' "$db")
+  fi
+  printf '%s\n' "$db"
+}
+
+# --- Per-team storage resolution (Phase 2: per-team backend) -----------------
+# Teams default to the shared global store (existing behavior, zero migration).
+# A team opts into its own store by setting a "storage" backend in its
+# teams/<team>/config.json; resolution then routes that team to a dedicated
+# directory under <skill>/db/teams/<team>/. This slots into the documented
+# [seam] above: env (AGMSG_STORAGE_PATH) > team config > built-in default.
+# These helpers are additive — existing call sites keep using agmsg_db_path()
+# until they are migrated to the team-aware path in a later step.
+
+# teams/ directory under the skill root.
+agmsg_teams_dir() {
+  local skill_dir; skill_dir="$(agmsg_skill_dir)" || return 1
+  printf '%s\n' "$skill_dir/teams"
+}
+
+# Storage backend selected for <team>, read from teams/<team>/config.json
+# ($.storage). Empty output => no per-team backend set => default (sqlite, global).
+agmsg_team_storage_driver() {
+  local team="$1" cfg driver
+  [ -n "$team" ] || return 0
+  cfg="$(agmsg_teams_dir)/$team/config.json" || return 0
+  [ -f "$cfg" ] || return 0
+  driver="$(agmsg_sqlite_mem \
+    "SELECT COALESCE(json_extract(readfile('$(agmsg_sql_readfile_path "$cfg")'), '\$.storage'), '');" \
+    2>/dev/null)"
+  [ "$driver" = "null" ] && driver=""
+  printf '%s' "$driver"
+}
+
+# Directory holding <team>'s store. env override > per-team (when a backend is
+# configured) > shared default.
+agmsg_team_storage_dir() {
+  local team="$1" default_dir driver
+  if [ -n "${AGMSG_STORAGE_PATH:-}" ]; then
+    printf '%s\n' "${AGMSG_STORAGE_PATH%/}"
+    return
+  fi
+  default_dir="$(agmsg_storage_dir)" || return 1
+  driver="$(agmsg_team_storage_driver "$team")"
+  if [ -n "$team" ] && [ -n "$driver" ]; then
+    printf '%s\n' "$default_dir/teams/$team"
+    return
+  fi
+  printf '%s\n' "$default_dir"
+}
+
+# Full path to <team>'s sqlite store (cygpath-converted like agmsg_db_path).
+agmsg_team_db_path() {
+  local db
+  db="$(agmsg_team_storage_dir "$1")/messages.db" || return 1
   if command -v cygpath >/dev/null 2>&1; then
     db=$(cygpath -m "$db" 2>/dev/null || printf '%s' "$db")
   fi

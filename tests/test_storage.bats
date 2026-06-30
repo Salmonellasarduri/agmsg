@@ -30,6 +30,33 @@ teardown() {
   [ "$(agmsg_db_path)" = "$BATS_TEST_TMPDIR/store/messages.db" ]
 }
 
+# --- per-team storage resolution (Phase 2: env > team config > default) ---
+
+@test "storage: a team with no storage backend uses the default global store" {
+  source "$SCRIPTS/lib/storage.sh"
+  unset AGMSG_STORAGE_PATH
+  # no teams/<t>/config.json storage key => same path as the global default
+  [ "$(agmsg_team_storage_driver noconf)" = "" ]
+  [ "$(agmsg_team_db_path noconf)" = "$(agmsg_db_path)" ]
+}
+
+@test "storage: a team with a storage backend resolves to a per-team store dir" {
+  source "$SCRIPTS/lib/storage.sh"
+  unset AGMSG_STORAGE_PATH
+  mkdir -p "$TEST_SKILL_DIR/teams/jt"
+  printf '%s\n' '{"name":"jt","storage":"jsonl"}' > "$TEST_SKILL_DIR/teams/jt/config.json"
+  [ "$(agmsg_team_storage_driver jt)" = "jsonl" ]
+  [ "$(agmsg_team_db_path jt)" = "$TEST_SKILL_DIR/db/teams/jt/messages.db" ]
+}
+
+@test "storage: AGMSG_STORAGE_PATH still overrides per-team resolution" {
+  source "$SCRIPTS/lib/storage.sh"
+  export AGMSG_STORAGE_PATH="$BATS_TEST_TMPDIR/store"
+  mkdir -p "$TEST_SKILL_DIR/teams/jt"
+  printf '%s\n' '{"name":"jt","storage":"jsonl"}' > "$TEST_SKILL_DIR/teams/jt/config.json"
+  [ "$(agmsg_team_db_path jt)" = "$BATS_TEST_TMPDIR/store/messages.db" ]
+}
+
 # --- agmsg_db_path() Windows path conversion (#197) ---
 
 @test "storage: agmsg_db_path applies cygpath -m on Windows so sqlite3.exe can open it (#197)" {
