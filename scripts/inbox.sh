@@ -14,16 +14,15 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/storage.sh"
-DB="$(agmsg_team_db_path "$TEAM")"
+# Read + mark through the team's storage backend (sqlite default).
+agmsg_storage_load "$TEAM"
 
-if [ ! -f "$DB" ]; then
+if ! storage_exists "$TEAM"; then
   if [ "$QUIET" = true ]; then exit 0; fi
   echo "No messages (DB not initialized)"
   exit 0
 fi
 
-# Read unread + mark through the team's storage backend (sqlite default).
-agmsg_storage_load "$TEAM"
 UNREAD=$(storage_list_unread "$TEAM" "$AGENT")
 
 if [ -z "$UNREAD" ]; then

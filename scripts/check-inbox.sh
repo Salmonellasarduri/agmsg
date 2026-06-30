@@ -135,11 +135,9 @@ for team in "${TEAM_LIST[@]}"; do
     other:*) continue ;;
   esac
 
-  DB="$(agmsg_team_db_path "$team")"
-  [ -f "$DB" ] || continue
-
   # Read unread + mark through the team's storage backend (sqlite default).
   agmsg_storage_load "$team"
+  storage_exists "$team" || continue
   RESULT=$(storage_list_unread "$team" "$AGENT")
   if [ -n "$RESULT" ]; then
     COUNT=$(echo "$RESULT" | wc -l | tr -d ' ')

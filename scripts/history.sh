@@ -10,16 +10,15 @@ LIMIT="${3:-20}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/storage.sh"
-DB="$(agmsg_team_db_path "$TEAM")"
+# Read history through the team's storage backend (sqlite default). The driver
+# returns newest-first records: from <US> to <US> body <US> ts <US> status.
+agmsg_storage_load "$TEAM"
 
-if [ ! -f "$DB" ]; then
+if ! storage_exists "$TEAM"; then
   echo "No messages (DB not initialized)"
   exit 0
 fi
 
-# Read history through the team's storage backend (sqlite default). The driver
-# returns newest-first records: from <US> to <US> body <US> ts <US> status.
-agmsg_storage_load "$TEAM"
 RESULT=$(storage_history "$TEAM" "$AGENT" "$LIMIT")
 
 if [ -z "$RESULT" ]; then
