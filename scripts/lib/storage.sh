@@ -147,18 +147,32 @@ agmsg_team_set_storage() {
 # scripts/drivers/storage/<name>.sh and rely on the helpers above.
 _AGMSG_LOADED_DRIVER=""
 agmsg_storage_load() {
-  local team="$1" name file
+  local team="$1" name file kind base
   name="$(agmsg_team_storage_driver "$team")"
   [ -n "$name" ] && [ "$name" != "null" ] || name="sqlite"
   [ "$_AGMSG_LOADED_DRIVER" = "$name" ] && return 0
-  file="$(agmsg_skill_dir)/scripts/drivers/storage/$name.sh" || return 1
-  if [ ! -f "$file" ]; then
-    echo "agmsg: storage driver '$name' not found ($file)" >&2
-    return 1
+  # Discovery + trust reuse the axis-generic registry (ADR 0001/0002), the same
+  # machinery the agent-type axis uses: built-ins under scripts/drivers/ always
+  # load; external plugin dirs are gated by the opt-in trustfile. So a future
+  # remote storage backend ships as a trusted external driver, no facade change.
+  if ! command -v agmsg_driver_bases >/dev/null 2>&1; then
+    # shellcheck disable=SC1090,SC1091
+    . "$(agmsg_skill_dir)/scripts/lib/driver-registry.sh"
   fi
-  # shellcheck disable=SC1090
-  . "$file"
-  _AGMSG_LOADED_DRIVER="$name"
+  while IFS="$(printf '\t')" read -r kind base; do
+    [ -n "$base" ] || continue
+    file="$base/storage/$name.sh"
+    [ -f "$file" ] || continue
+    if [ "$kind" = external ] && ! agmsg_driver_is_trusted storage "$name" "$file"; then
+      continue
+    fi
+    # shellcheck disable=SC1090
+    . "$file"
+    _AGMSG_LOADED_DRIVER="$name"
+    return 0
+  done < <(agmsg_driver_bases)
+  echo "agmsg: no trusted storage driver '$name' found" >&2
+  return 1
 }
 
 # Run sqlite3 against the message store with a busy_timeout, so a writer that
