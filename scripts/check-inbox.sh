@@ -142,11 +142,9 @@ for team in "${TEAM_LIST[@]}"; do
   DB="$(agmsg_team_db_path "$team")"
   [ -f "$DB" ] || continue
 
-  RESULT=$(agmsg_sqlite "$DB" "
-    SELECT from_agent || char(31) || replace(replace(body, char(10), '\n'), char(9), '\t') || char(31) || created_at
-    FROM messages WHERE team='$team_sql' AND to_agent='$AGENT_SQL' AND read_at IS NULL
-    ORDER BY created_at ASC;
-  ")
+  # Read unread + mark through the team's storage backend (sqlite default).
+  agmsg_storage_load "$team"
+  RESULT=$(storage_list_unread "$team" "$AGENT")
   if [ -n "$RESULT" ]; then
     COUNT=$(echo "$RESULT" | wc -l | tr -d ' ')
     OUTPUT+="$COUNT new message(s) in $team:"$'\n'
@@ -154,16 +152,8 @@ for team in "${TEAM_LIST[@]}"; do
       OUTPUT+="  [$ts] $from: $body"$'\n'
     done <<< "$RESULT"
     OUTPUT+=$'\n'
-    # Mark as read — dual-write: append message_read events (append-only
-    # read-state log) for the just-read set, AND keep read_at for back-compat.
-    # The events INSERT runs BEFORE the UPDATE so read_at IS NULL still matches.
-    agmsg_sqlite "$DB" "
-INSERT INTO events (type, team, agent, msg_id)
-  SELECT 'message_read', team, to_agent, id FROM messages
-  WHERE team='$team_sql' AND to_agent='$AGENT_SQL' AND read_at IS NULL;
-UPDATE messages SET read_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
-  WHERE team='$team_sql' AND to_agent='$AGENT_SQL' AND read_at IS NULL;
-" 2>/dev/null || true
+    # Mark read — the driver dual-writes append-only events + read_at.
+    storage_mark_read "$team" "$AGENT"
   fi
 done
 
