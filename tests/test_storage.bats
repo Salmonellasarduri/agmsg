@@ -122,6 +122,42 @@ teardown() {
   [ "$(agmsg_sqlite_mem "SELECT json_extract(readfile('$TEST_SKILL_DIR/teams/ut/config.json'),'\$.name');")" = "ut" ]
 }
 
+@test "storage migrate: carries messages + read-state to jsonl and purges the source" {
+  if ! command -v jq >/dev/null 2>&1; then skip "jq not installed"; fi
+  source "$SCRIPTS/lib/storage.sh"
+  unset AGMSG_STORAGE_PATH
+
+  # default (global sqlite) team: m1 read, m2 unread
+  bash "$SCRIPTS/send.sh" mg alice bob "m1"
+  bash "$SCRIPTS/inbox.sh" mg bob >/dev/null      # marks m1 read
+  bash "$SCRIPTS/send.sh" mg alice bob "m2"        # unread
+
+  bash "$SCRIPTS/storage.sh" migrate jsonl mg
+
+  # mapping flipped
+  [ "$(agmsg_team_storage_driver mg)" = "jsonl" ]
+  # source purged: no mg rows left in the global sqlite store
+  [ "$(sqlite3 "$TEST_SKILL_DIR/db/messages.db" "SELECT COUNT(*) FROM messages WHERE team='mg';")" -eq 0 ]
+  # both messages now in the jsonl store
+  [ "$(wc -l < "$TEST_SKILL_DIR/db/teams/mg/messages.jsonl" | tr -d ' ')" -eq 2 ]
+  # backup file retained
+  ls "$TEST_SKILL_DIR/db/migrate-sqlite-to-jsonl.jsonl" >/dev/null
+
+  # read-state preserved: only m2 is still unread for bob
+  run bash "$SCRIPTS/inbox.sh" mg bob
+  [[ "$output" =~ "m2" ]]
+  [[ ! "$output" =~ "m1" ]]
+}
+
+@test "storage migrate: no-op when already on the target backend" {
+  source "$SCRIPTS/lib/storage.sh"
+  unset AGMSG_STORAGE_PATH
+  bash "$SCRIPTS/send.sh" already alice bob "x"
+  run bash "$SCRIPTS/storage.sh" migrate sqlite already
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "already on sqlite" ]]
+}
+
 @test "storage driver (jsonl): per-team send/list/mark/history via the facade" {
   if ! command -v jq >/dev/null 2>&1; then skip "jq not installed"; fi
   unset AGMSG_STORAGE_PATH
