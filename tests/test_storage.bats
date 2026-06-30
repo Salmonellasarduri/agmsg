@@ -122,6 +122,38 @@ teardown() {
   [ "$(agmsg_sqlite_mem "SELECT json_extract(readfile('$TEST_SKILL_DIR/teams/ut/config.json'),'\$.name');")" = "ut" ]
 }
 
+@test "storage driver (sqlite): watch_tip/after stream only messages past the cursor" {
+  source "$SCRIPTS/lib/storage.sh"
+  export AGMSG_STORAGE_PATH="$BATS_TEST_TMPDIR/store"
+  agmsg_storage_load t
+  storage_send t alice bob "w1"
+  local tip; tip="$(storage_watch_tip t)"
+  storage_send t alice bob "w2"
+  run storage_watch_after t bob "$tip"
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "w2" ]]
+  [[ ! "$output" =~ "w1" ]]
+  # first field is a numeric position past the cursor
+  local pos; pos="$(printf '%s' "$output" | head -1 | cut -d$'\x1f' -f1)"
+  [ "$pos" -gt "$tip" ]
+}
+
+@test "storage driver (jsonl): watch_tip/after stream only messages past the cursor" {
+  if ! command -v jq >/dev/null 2>&1; then skip "jq not installed"; fi
+  source "$SCRIPTS/lib/storage.sh"
+  unset AGMSG_STORAGE_PATH
+  mkdir -p "$TEST_SKILL_DIR/teams/jw"
+  printf '%s\n' '{"name":"jw","storage":"jsonl"}' > "$TEST_SKILL_DIR/teams/jw/config.json"
+  agmsg_storage_load jw
+  storage_send jw alice bob "w1"
+  local tip; tip="$(storage_watch_tip jw)"
+  storage_send jw alice bob "w2"
+  run storage_watch_after jw bob "$tip"
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "w2" ]]
+  [[ ! "$output" =~ "w1" ]]
+}
+
 @test "storage migrate: carries messages + read-state to jsonl and purges the source" {
   if ! command -v jq >/dev/null 2>&1; then skip "jq not installed"; fi
   source "$SCRIPTS/lib/storage.sh"

@@ -62,6 +62,36 @@ UPDATE messages SET read_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
 " 2>/dev/null || true
 }
 
+# storage_watch_tip <team> — current high-water cursor for the team's store
+# (the newest message id). A fresh watcher starts here so it streams only what
+# arrives next (no replay of history).
+storage_watch_tip() {
+  local team="$1" db tl
+  db="$(agmsg_team_db_path "$team")"
+  [ -f "$db" ] || { echo 0; return 0; }
+  tl="$(agmsg_sqlesc "$team")"
+  agmsg_sqlite "$db" "SELECT COALESCE(MAX(id),0) FROM messages WHERE team='$tl';" 2>/dev/null || echo 0
+}
+
+# storage_watch_after <team> <agent> <cursor>
+# Emit new messages to <agent> with position > <cursor>, oldest first, as:
+#   <pos> <US> <ts> <US> <team> <US> <from> <US> <to> <US> <body>
+# <pos> is the cursor type (the message id); body CR stripped + newlines -> "\n".
+storage_watch_after() {
+  local team="$1" agent="$2" cursor="$3" db tl al
+  db="$(agmsg_team_db_path "$team")"
+  [ -f "$db" ] || return 0
+  case "$cursor" in ''|*[!0-9]*) cursor=0 ;; esac
+  tl="$(agmsg_sqlesc "$team")"; al="$(agmsg_sqlesc "$agent")"
+  agmsg_sqlite -separator "$(printf '\037')" "$db" "
+    SELECT id, created_at, team, from_agent, to_agent,
+           replace(replace(body, char(13), ''), char(10), '\n')
+    FROM messages
+    WHERE id > $cursor AND team='$tl' AND to_agent='$al'
+    ORDER BY id;
+  "
+}
+
 # storage_export <team>
 # Portable dump: one JSON object per message — {id,from,to,body,at,read_by:[agent...]}
 # (read_by = the recipient when the message has been read). Used by migrate.
