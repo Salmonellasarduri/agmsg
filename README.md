@@ -392,6 +392,39 @@ The message store path resolves as **`AGMSG_STORAGE_PATH` (env) > built-in defau
 AGMSG_STORAGE_PATH=/tmp/agmsg-sandbox ./scripts/send.sh myteam alice bob "hi"
 ```
 
+### Storage backends (per-team)
+
+Each team stores its messages through a **storage backend**. The default is
+`sqlite` (the shared `messages.db`); a team can opt into a per-team store — a
+different backend and/or its own files — without affecting any other team.
+
+| Backend | Store | Notes |
+|---|---|---|
+| `sqlite` (default) | `messages.db` | shared global store; existing teams use this unchanged |
+| `jsonl` | `db/teams/<team>/messages.jsonl` + `events.jsonl` | append-only files, queried with `jq` (required) |
+
+A team's backend is recorded in its `teams/<team>/config.json` (`"storage"` key).
+Message **content** always lives in the messages log; read-state is an
+append-only event, so switching backends never rewrites content, and default
+teams keep the shared store unchanged.
+
+Manage backends with `scripts/storage.sh` — an **operator command you run
+yourself**; it is intentionally not exposed in the per-agent skill surface (a
+`migrate` moves data, so it should not be agent-invokable):
+
+```bash
+# Point a team at a backend (no data move). Omit <team> to apply to all teams.
+./scripts/storage.sh use jsonl myteam
+
+# Migrate a team's messages + read-state to a backend. Omit <team> for all teams.
+# Order: export (kept as a backup) -> import into the new store -> purge source.
+./scripts/storage.sh migrate jsonl myteam
+```
+
+`migrate` carries a team's history across and removes the old store; the export
+file left in the team's store dir is a plain-JSONL backup. A team already on the
+target backend is a no-op.
+
 ### Sandbox compatibility (Claude Code)
 
 Claude Code's sandbox restricts filesystem writes to the project directory. In `monitor` mode, `watch.sh` runs inside the sandbox and needs to write pidfiles and SQLite WAL files under `~/.agents/skills/agmsg/`. If you have sandboxing enabled, add an allowlist entry to your settings:
