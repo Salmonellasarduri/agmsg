@@ -53,6 +53,13 @@ _max_message_id() {
     agmsg_sqlite "$(agmsg_db_path)" "SELECT COALESCE(MAX(id), 0) FROM messages;" )
 }
 
+# Cursor for a (team, agent) pair from a watcher's .cursors file (lines are
+# "<team>\t<agent>\t<cursor>"). Per-pair cursors replaced the old single-int
+# watermark file (#107) when storage went per-team.
+_pair_cursor() {
+  awk -F'\t' -v t="$2" -v a="$3" '$1==t && $2==a {print $3}' "$1"
+}
+
 _wait_for_file() {
   local file="$1" i
   for i in $(seq 1 100); do
@@ -126,10 +133,10 @@ _wait_for_file_contains() {
   ! grep -q "M0-history" "$TEST_SKILL_DIR/fresh.log"
 }
 
-@test "watch: persists a watermark file for the session" {
+@test "watch: persists a cursors file for the session" {
   skip_on_windows "watcher background launch under Git Bash (#182)"
   run_watcher_for "sess-wm" "$TEST_SKILL_DIR/wm.log" 1.5
-  [ -f "$TEST_SKILL_DIR/run/watch.$(_iid sess-wm).watermark" ]
+  [ -f "$TEST_SKILL_DIR/run/watch.$(_iid sess-wm).cursors" ]
 }
 
 @test "watch: exits within one interval when its session dies, without advancing the watermark past an undelivered row (#67)" {
@@ -151,7 +158,7 @@ _wait_for_file_contains() {
   # arrived while the watcher was down".
   local sesspid; sleep 600 & sesspid=$!
   local iid="sess-liveness.$sesspid"
-  local wm="$TEST_SKILL_DIR/run/watch.$iid.watermark"
+  local wm="$TEST_SKILL_DIR/run/watch.$iid.cursors"
   local pf="$TEST_SKILL_DIR/run/watch.$iid.pid"
   local out="$TEST_SKILL_DIR/liveness-delivery.log"
 
@@ -180,7 +187,7 @@ _wait_for_file_contains() {
   _wait_for_missing "$pf" || { kill "$w" 2>/dev/null || true; false; }
   run kill -0 "$w"; [ "$status" -ne 0 ]
   [ "$first_id" != "$second_id" ]
-  [ "$(cat "$wm")" = "$first_id" ]
+  [ "$(_pair_cursor "$wm" team alice)" = "$first_id" ]
   ! grep -q "M2-undelivered" "$out"
 }
 
@@ -188,7 +195,7 @@ _wait_for_file_contains() {
   skip_on_windows "watcher background launch under Git Bash (#182)"
   local sid="sess-stdout-closed"
   local iid="$(_iid "$sid")"
-  local wm="$TEST_SKILL_DIR/run/watch.$iid.watermark"
+  local wm="$TEST_SKILL_DIR/run/watch.$iid.cursors"
   local pf="$TEST_SKILL_DIR/run/watch.$iid.pid"
 
   AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" "$sid" "$PROJ" claude-code \
@@ -197,7 +204,7 @@ _wait_for_file_contains() {
 
   _wait_for_file "$wm"
   [ -f "$pf" ]
-  local initial="$(cat "$wm")"
+  local initial="$(_pair_cursor "$wm" team alice)"
 
   bash "$SCRIPTS/send.sh" team bob alice "M-after-closed-stdout" >/dev/null
 
@@ -208,17 +215,17 @@ _wait_for_file_contains() {
   }
   wait "$w" 2>/dev/null || true
 
-  [ "$(cat "$wm")" = "$initial" ]
+  [ "$(_pair_cursor "$wm" team alice)" = "$initial" ]
 
   run_watcher_for "$sid" "$TEST_SKILL_DIR/closed-redelivery.log" 2
   grep -q "M-after-closed-stdout" "$TEST_SKILL_DIR/closed-redelivery.log"
 }
 
-@test "session-end: removes the session watermark file" {
-  # Key the watermark under the same instance id session-end will derive.
-  local wm="$TEST_SKILL_DIR/run/watch.$(_iid sess-end).watermark"
+@test "session-end: removes the session cursors file" {
+  # Key the cursors file under the same instance id session-end will derive.
+  local wm="$TEST_SKILL_DIR/run/watch.$(_iid sess-end).cursors"
   mkdir -p "$TEST_SKILL_DIR/run"
-  echo 5 > "$wm"
+  printf 'team\talice\t5\n' > "$wm"
   printf '{"session_id":"sess-end"}' | bash "$SCRIPTS/session-end.sh" claude-code "$PROJ" >/dev/null 2>&1 || true
   [ ! -f "$wm" ]
 }
@@ -312,24 +319,24 @@ _wait_for_file_contains() {
   wait "$wpid" 2>/dev/null || true
 }
 
-@test "session-start: GCs stale watermark/ready but keeps live ones" {
+@test "session-start: GCs stale cursors/ready but keeps live ones" {
   skip_on_windows "watcher live-owner liveness under Git Bash (#182)"
   bash "$SCRIPTS/join.sh" team alice claude-code "$PROJ" >/dev/null
   mkdir -p "$TEST_SKILL_DIR/run"
   # Stale (owner has no live cc-instance).
-  echo 5 > "$TEST_SKILL_DIR/run/watch.deadsid.watermark"
+  printf 'team\talice\t5\n' > "$TEST_SKILL_DIR/run/watch.deadsid.cursors"
   echo deadsid > "$TEST_SKILL_DIR/run/ready.team__ghost"
   # Live owner.
   setup_live_owner "$TEST_SKILL_DIR/run" LIVESID
-  echo 7 > "$TEST_SKILL_DIR/run/watch.LIVESID.watermark"
+  printf 'team\talice\t7\n' > "$TEST_SKILL_DIR/run/watch.LIVESID.cursors"
   echo LIVESID > "$TEST_SKILL_DIR/run/ready.team__live"
 
   printf '{"session_id":"somesess"}' \
     | bash "$SCRIPTS/session-start.sh" claude-code "$PROJ" >/dev/null 2>&1 || true
 
-  [ ! -f "$TEST_SKILL_DIR/run/watch.deadsid.watermark" ]
+  [ ! -f "$TEST_SKILL_DIR/run/watch.deadsid.cursors" ]
   [ ! -f "$TEST_SKILL_DIR/run/ready.team__ghost" ]
-  [ -f "$TEST_SKILL_DIR/run/watch.LIVESID.watermark" ]
+  [ -f "$TEST_SKILL_DIR/run/watch.LIVESID.cursors" ]
   [ -f "$TEST_SKILL_DIR/run/ready.team__live" ]
 }
 
@@ -439,11 +446,11 @@ _wait_pidfile() {
   skip_on_windows "watcher background launch under Git Bash (#182)"
   local sid="sess-burst"
   local out="$TEST_SKILL_DIR/burst.log"
-  local wm="$TEST_SKILL_DIR/run/watch.$(_iid "$sid").watermark"
+  local wm="$TEST_SKILL_DIR/run/watch.$(_iid "$sid").cursors"
 
   AGMSG_WATCH_INTERVAL=1 bash "$SCRIPTS/watch.sh" "$sid" "$PROJ" claude-code >"$out" 2>/dev/null &
   local w=$!
-  _wait_for_file "$wm"          # ready to receive (watermark seeded)
+  _wait_for_file "$wm"          # ready to receive (cursors seeded)
 
   local n
   for n in 1 2 3 4 5 6 7 8; do
