@@ -181,6 +181,42 @@ teardown() {
   [[ ! "$output" =~ "m1" ]]
 }
 
+@test "rename-team: carries a per-team jsonl store to the new name" {
+  if ! command -v jq >/dev/null 2>&1; then skip "jq not installed"; fi
+  source "$SCRIPTS/lib/storage.sh"
+  unset AGMSG_STORAGE_PATH
+  bash "$SCRIPTS/join.sh" oldteam alice claude-code "/tmp/agmsg-rt-proj" >/dev/null
+  bash "$SCRIPTS/storage.sh" use jsonl oldteam
+  bash "$SCRIPTS/send.sh" oldteam alice bob "keep me"
+  [ -f "$TEST_SKILL_DIR/db/teams/oldteam/messages.jsonl" ]
+
+  bash "$SCRIPTS/rename-team.sh" oldteam newteam
+
+  [ ! -d "$TEST_SKILL_DIR/db/teams/oldteam" ]
+  [ -f "$TEST_SKILL_DIR/db/teams/newteam/messages.jsonl" ]
+  [ "$(agmsg_team_storage_driver newteam)" = "jsonl" ]
+  run bash "$SCRIPTS/inbox.sh" newteam bob
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "keep me" ]]
+}
+
+@test "rename-team: rewrites the team column in a per-team sqlite store" {
+  source "$SCRIPTS/lib/storage.sh"
+  unset AGMSG_STORAGE_PATH
+  bash "$SCRIPTS/join.sh" sqold alice claude-code "/tmp/agmsg-rt-proj2" >/dev/null
+  bash "$SCRIPTS/storage.sh" use sqlite sqold
+  bash "$SCRIPTS/send.sh" sqold alice bob "sq keep"
+  [ -f "$TEST_SKILL_DIR/db/teams/sqold/messages.db" ]
+
+  bash "$SCRIPTS/rename-team.sh" sqold sqnew
+
+  [ -f "$TEST_SKILL_DIR/db/teams/sqnew/messages.db" ]
+  # queries filter by team, so the column must have been rewritten to the new name
+  run bash "$SCRIPTS/inbox.sh" sqnew bob
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "sq keep" ]]
+}
+
 @test "storage migrate: no-op when already on the target backend" {
   source "$SCRIPTS/lib/storage.sh"
   unset AGMSG_STORAGE_PATH

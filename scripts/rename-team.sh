@@ -79,9 +79,31 @@ if [ -f "$NEW_CONFIG" ]; then
   agmsg_write_atomic "$NEW_CONFIG" "$UPDATED"
 fi
 
-# --- Update messages in DB ---
+# --- Update messages in the shared global store ---
 if [ -f "$DB" ]; then
   agmsg_sqlite "$DB" "UPDATE messages SET team='$(_agmsg_sqlesc "$NEW_TEAM")' WHERE team='$(_agmsg_sqlesc "$OLD_TEAM")';"
+fi
+
+# --- Move a per-team store, if the team opted into one ---
+# A team with a per-team backend keeps its messages under db/teams/<team>/; the
+# global UPDATE above is a no-op for it. Carry the store dir over to the new name
+# so the renamed team keeps its history. (No env override: AGMSG_STORAGE_PATH
+# routes everything to a single dir, so there are no per-team subdirs to move.)
+if [ -z "${AGMSG_STORAGE_PATH:-}" ]; then
+  STORE_ROOT="$(agmsg_storage_dir)"
+  OLD_STORE="$STORE_ROOT/teams/$OLD_TEAM"
+  NEW_STORE="$STORE_ROOT/teams/$NEW_TEAM"
+  if [ -d "$OLD_STORE" ]; then
+    mkdir -p "$(dirname "$NEW_STORE")"
+    mv "$OLD_STORE" "$NEW_STORE"
+    # Per-team sqlite filters queries by the team column, so rewrite it. (The
+    # jsonl backend keys reads on the recipient, not team, so its cosmetic team
+    # field is left as-is.)
+    if [ -f "$NEW_STORE/messages.db" ]; then
+      agmsg_sqlite "$NEW_STORE/messages.db" "UPDATE messages SET team='$(_agmsg_sqlesc "$NEW_TEAM")' WHERE team='$(_agmsg_sqlesc "$OLD_TEAM")';" 2>/dev/null || true
+      agmsg_sqlite "$NEW_STORE/messages.db" "UPDATE events SET team='$(_agmsg_sqlesc "$NEW_TEAM")' WHERE team='$(_agmsg_sqlesc "$OLD_TEAM")';" 2>/dev/null || true
+    fi
+  fi
 fi
 
 agmsg_lock_release
