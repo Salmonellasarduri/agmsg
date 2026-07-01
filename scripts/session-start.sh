@@ -186,9 +186,9 @@ AGENT_PID=$(agmsg_agent_pid "$TYPE" 2>/dev/null || true)
 # cc-instance cleanup so actas_lock_sid_alive reflects current liveness. Both
 # are advisory (a live watcher rewrites them on attach; spawn clears the
 # sentinel before use), so this is hygiene, not correctness.
-for f in "$RUN_DIR"/watch.*.watermark; do
+for f in "$RUN_DIR"/watch.*.cursors; do
   [ -f "$f" ] || continue
-  wm_sid=${f##*/}; wm_sid=${wm_sid#watch.}; wm_sid=${wm_sid%.watermark}
+  wm_sid=${f##*/}; wm_sid=${wm_sid#watch.}; wm_sid=${wm_sid%.cursors}
   actas_lock_sid_alive "$wm_sid" || rm -f "$f"
 done
 for f in "$RUN_DIR"/ready.*; do

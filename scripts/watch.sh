@@ -230,51 +230,68 @@ if [ -z "$PAIRS" ]; then
   exit 0
 fi
 
-# Build the SQL WHERE clause. Each pair contributes:
-#   (team='<team>' AND to_agent='<agent>')
-# joined by OR. Single quotes inside team/agent names are doubled for SQL.
-sql_escape() { printf '%s' "$1" | sed "s/'/''/g"; }
+# Per-(team,agent) cursors. Each team's store has its own position sequence
+# (sqlite message id / jsonl line number), and a session may span teams on
+# different stores, so we track a cursor PER PAIR rather than one global
+# watermark. The storage-specific watch logic lives in the driver
+# (storage_watch_tip / storage_watch_after); this script only dispatches per
+# team. Cursors are persisted per session_id so a *restart* resumes from the
+# last delivered position per pair and drops nothing that arrived during the gap
+# (#107). A *fresh* pair starts at the store's current tip — live push, no
+# replay. bash 3.2 has no associative arrays — parallel indexed arrays + linear
+# lookup (pair counts are tiny).
+CURSOR_FILE="$RUN_DIR/watch.$SESSION_ID.cursors"
+PAIR_KEYS=()    # each entry: "<team>\t<agent>"
+PAIR_CURS=()    # parallel: the pair's cursor
 
-WHERE_PAIRS=""
-while IFS=$'\t' read -r team agent; do
+_cursor_index() {
+  local i=0 k
+  for k in ${PAIR_KEYS[@]+"${PAIR_KEYS[@]}"}; do
+    [ "$k" = "$1" ] && { printf '%s' "$i"; return; }
+    i=$((i + 1))
+  done
+  printf '%s' "-1"
+}
+_cursor_get() { local i; i="$(_cursor_index "$1")"; [ "$i" -ge 0 ] && printf '%s' "${PAIR_CURS[$i]}"; }
+_cursor_set() {
+  local i; i="$(_cursor_index "$1")"
+  if [ "$i" -ge 0 ]; then PAIR_CURS[$i]="$2"; else PAIR_KEYS+=("$1"); PAIR_CURS+=("$2"); fi
+}
+persist_cursors() {
+  local i=0
+  : > "$CURSOR_FILE" 2>/dev/null || return 0
+  while [ "$i" -lt "${#PAIR_KEYS[@]}" ]; do
+    printf '%s\t%s\n' "${PAIR_KEYS[$i]}" "${PAIR_CURS[$i]}" >> "$CURSOR_FILE" 2>/dev/null || true
+    i=$((i + 1))
+  done
+}
+
+TAB="$(printf '\t')"
+
+# Restore persisted cursors (restart-resume). File lines: "<team>\t<agent>\t<cursor>".
+if [ -f "$CURSOR_FILE" ]; then
+  while IFS="$TAB" read -r _ct _ca _cc; do
+    [ -z "$_ct" ] && continue
+    case "$_cc" in ''|*[!0-9]*) continue ;; esac
+    _cursor_set "${_ct}${TAB}${_ca}" "$_cc"
+  done < "$CURSOR_FILE"
+fi
+
+# Initialize any pair without a persisted cursor to its store's current tip.
+while IFS="$TAB" read -r team agent; do
   [ -z "$team" ] && continue
-  t_esc=$(sql_escape "$team")
-  a_esc=$(sql_escape "$agent")
-  pair="(team='$t_esc' AND to_agent='$a_esc')"
-  WHERE_PAIRS="${WHERE_PAIRS:+$WHERE_PAIRS OR }$pair"
-done <<< "$PAIRS"
-
-# Determine the starting watermark.
-#
-# The watermark is persisted per session_id so that a *restart* of this
-# session's watcher resumes from the last delivered id instead of jumping to
-# the current MAX(id). Monitor restarts are routine — `actas`/`drop` do
-# TaskStop + relaunch, `/clear`/resume re-fires the SessionStart directive, and
-# a killed watcher self-restarts — and the old "start from MAX(id)" behavior
-# silently dropped every message that landed in the gap between the previous
-# watcher stopping and the new one taking its mark. Resuming from the persisted
-# watermark closes that gap; staying strictly after the last delivered id
-# avoids re-streaming anything already seen. See #107.
-#
-# A *fresh* session (no persisted watermark) still starts from the current
-# MAX(id) — live push, no replay of history (the no-arg inbox check covers
-# historical unread, not this stream).
-WATERMARK_FILE="$RUN_DIR/watch.$SESSION_ID.watermark"
-persist_watermark() { printf '%s\n' "$LAST" > "$WATERMARK_FILE" 2>/dev/null || true; }
-
-LAST=""
-if [ -f "$WATERMARK_FILE" ]; then
-  LAST="$(cat "$WATERMARK_FILE" 2>/dev/null || true)"
-  case "$LAST" in ''|*[!0-9]*) LAST="" ;; esac
-fi
-if [ -z "$LAST" ]; then
-  LAST=0
-  if [ -f "$DB" ]; then
-    LAST="$(agmsg_sqlite "$DB" "SELECT COALESCE(MAX(id), 0) FROM messages WHERE $WHERE_PAIRS;" 2>/dev/null || echo 0)"
+  _ckey="${team}${TAB}${agent}"
+  if [ -z "$(_cursor_get "$_ckey")" ]; then
+    if agmsg_storage_load "$team" 2>/dev/null; then
+      _tip="$(storage_watch_tip "$team" 2>/dev/null || echo 0)"
+    else
+      _tip=0
+    fi
+    case "$_tip" in ''|*[!0-9]*) _tip=0 ;; esac
+    _cursor_set "$_ckey" "$_tip"
   fi
-  case "$LAST" in ''|*[!0-9]*) LAST=0 ;; esac
-  persist_watermark
-fi
+done <<< "$PAIRS"
+persist_cursors
 
 # DB-open healthcheck (#197). The main loop guards every query with
 # `2>/dev/null || true`, so when sqlite3 cannot open the store the watcher keeps
@@ -322,52 +339,48 @@ while true; do
   if agmsg_instance_is_composite "$SESSION_ID" && ! agmsg_instance_alive "$SESSION_ID"; then
     exit 0
   fi
-  if [ -f "$DB" ]; then
-    ROWS="$(agmsg_sqlite -separator $'\x1f' "$DB" "
-      SELECT id, created_at, team, from_agent, to_agent,
-             replace(replace(body, char(13), ''), char(10), '\\n')
-      FROM messages
-      WHERE id > $LAST AND ($WHERE_PAIRS)
-      ORDER BY id;
-    " 2>/dev/null || true)"
-
-    if [ -n "$ROWS" ]; then
-      while IFS=$'\x1f' read -r id ts team from to body; do
-        [ -z "$id" ] && continue
-        # Control message: a leader's `despawn` sends `ctrl:despawn` to this
-        # role. Tear ourselves down rather than printing it — drop the role
-        # (releases the lock + registration) then close our own tmux pane,
-        # which also ends the agent CLI sharing it. Deterministic teardown, no
-        # dependence on the agent LLM noticing the message. See #109.
-        if [ "$body" = "ctrl:despawn" ]; then
-          LAST="$id"; persist_watermark
-          # Only an EXCLUSIVE watcher dedicated to exactly this role tears
-          # itself down. A broad-subscription watcher (e.g. a leader whose
-          # default watcher subscribes to every project role, including the
-          # despawn target) must NOT act on it — its $TMUX_PANE is the leader's
-          # own pane, so killing it would take down the leader's session. The
-          # spawned member's watcher runs in actas mode (ACTIVE_NAME=$to) in its
-          # own pane; that's the one meant to respond. See #109.
-          if [ -z "$ACTIVE_NAME" ] || [ "$to" != "$ACTIVE_NAME" ]; then
-            continue
-          fi
-          "$SCRIPT_DIR/reset.sh" "$PROJECT_PATH" "$AGENT_TYPE" "$to" "$SESSION_ID" >/dev/null 2>&1 || true
-          if [ -n "${TMUX_PANE:-}" ] && command -v tmux >/dev/null 2>&1; then
-            tmux kill-pane -t "$TMUX_PANE" 2>/dev/null || true
-          else
-            echo "agmsg watch: despawned '$to' (role dropped); close this window manually" >&2
-          fi
-          exit 0
+  # Poll each (team, agent) pair against its own store via the driver. Default
+  # teams all resolve to the shared global store; per-team-backend teams resolve
+  # to their own. The driver owns the storage-specific watch (storage_watch_after).
+  while IFS="$TAB" read -r team agent; do
+    [ -z "$team" ] && continue
+    agmsg_storage_load "$team" 2>/dev/null || continue
+    storage_exists "$team" || continue
+    _ckey="${team}${TAB}${agent}"
+    cur="$(_cursor_get "$_ckey")"; case "$cur" in ''|*[!0-9]*) cur=0 ;; esac
+    ROWS="$(storage_watch_after "$team" "$agent" "$cur" 2>/dev/null || true)"
+    [ -n "$ROWS" ] || continue
+    while IFS=$'\x1f' read -r pos ts rtm from to body; do
+      [ -z "$pos" ] && continue
+      # Control message: a leader's `despawn` sends `ctrl:despawn` to this role.
+      # Tear ourselves down rather than printing it — drop the role (releases the
+      # lock + registration) then close our own tmux pane, which also ends the
+      # agent CLI. Deterministic teardown, no dependence on the LLM. See #109.
+      if [ "$body" = "ctrl:despawn" ]; then
+        _cursor_set "$_ckey" "$pos"; persist_cursors
+        # Only an EXCLUSIVE watcher dedicated to exactly this role tears itself
+        # down. A broad-subscription watcher (e.g. a leader subscribing to every
+        # project role) must NOT act on it — its $TMUX_PANE is the leader's own
+        # pane. The spawned member's actas watcher (ACTIVE_NAME=$to) responds. #109.
+        if [ -z "$ACTIVE_NAME" ] || [ "$to" != "$ACTIVE_NAME" ]; then
+          continue
         fi
-        if ! printf '%s | %s | %s → %s | %s\n' "$ts" "$team" "$from" "$to" "$body"; then
-          cleanup
-          exit 0
+        "$SCRIPT_DIR/reset.sh" "$PROJECT_PATH" "$AGENT_TYPE" "$to" "$SESSION_ID" >/dev/null 2>&1 || true
+        if [ -n "${TMUX_PANE:-}" ] && command -v tmux >/dev/null 2>&1; then
+          tmux kill-pane -t "$TMUX_PANE" 2>/dev/null || true
+        else
+          echo "agmsg watch: despawned '$to' (role dropped); close this window manually" >&2
         fi
-        LAST="$id"
-        persist_watermark
-      done <<< "$ROWS"
-    fi
-  fi
+        exit 0
+      fi
+      if ! printf '%s | %s | %s → %s | %s\n' "$ts" "$rtm" "$from" "$to" "$body"; then
+        cleanup
+        exit 0
+      fi
+      _cursor_set "$_ckey" "$pos"
+      persist_cursors
+    done <<< "$ROWS"
+  done <<< "$PAIRS"
 
   # Run sleep in the background and `wait` for it so signal traps fire
   # immediately. Bash defers traps while a foreground builtin like `sleep`
