@@ -116,13 +116,9 @@ touch "$MARKER"
 # Check for unread messages and mark as read. The store is resolved PER TEAM
 # inside the loop (team-aware): a team with a per-team backend reads its own
 # store; default teams all resolve to the shared global store (unchanged).
-_agmsg_sqlesc() { printf %s "$1" | sed "s/'/''/g"; }
-AGENT_SQL="$(_agmsg_sqlesc "$AGENT")"
-
 OUTPUT=""
 IFS=',' read -ra TEAM_LIST <<< "$TEAMS"
 for team in "${TEAM_LIST[@]}"; do
-  team_sql="$(_agmsg_sqlesc "$team")"
   # Honor actas exclusivity locks. If (team, AGENT) is currently held by
   # another live session, that session is the owner of that role's inbox —
   # don't deliver here. Mirrors the per-pair filtering watch.sh does for
