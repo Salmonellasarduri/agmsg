@@ -195,8 +195,8 @@ const localeCodes = Object.keys(languages);
               </div>
               <div class="install-panel flex items-center gap-2" data-panel="mac" style="display: none;">
                 <span class="select-none text-muted">$</span>
-                <code class="text-fg">brew tap fujibee/agmsg &amp;&amp; brew install --cask agmsg</code>
-                <button type="button" class="copy-btn ml-auto shrink-0 rounded-md p-1.5 text-muted transition hover:bg-white/10 hover:text-fg" data-copy="brew tap fujibee/agmsg && brew install --cask agmsg" aria-label={t.hero.copyInstallAria}>
+                <code class="text-fg">brew tap fujibee/agmsg &amp;&amp; brew trust fujibee/agmsg &amp;&amp; brew install --cask agmsg</code>
+                <button type="button" class="copy-btn ml-auto shrink-0 rounded-md p-1.5 text-muted transition hover:bg-white/10 hover:text-fg" data-copy="brew tap fujibee/agmsg && brew trust fujibee/agmsg && brew install --cask agmsg" aria-label={t.hero.copyInstallAria}>
                   <svg class="copy-icon h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                   <svg class="check-icon hidden h-4 w-4 text-accent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
                 </button>
