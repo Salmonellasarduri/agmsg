@@ -42,6 +42,16 @@ who="$(gh api user --jq .login 2>/dev/null || true)"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
+# The cask's `app` stanza must track the bundle name, which follows
+# tauri.conf.json's productName (e.g. the 0.1.1 rename "agmsg app" ->
+# "agmsg" changes the bundle to agmsg.app). Derive it from the repo at
+# HEAD rather than trusting the tap's current value — the script pushes
+# immediately, so there is no window for a manual fix-up.
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+PRODUCT_NAME="$(sed -n 's/^  "productName": *"\(.*\)",*$/\1/p' "$ROOT/app/src-tauri/tauri.conf.json" | head -1)"
+[ -n "$PRODUCT_NAME" ] || die "could not read productName from app/src-tauri/tauri.conf.json"
+APP_BUNDLE="$PRODUCT_NAME.app"
+
 # 1. Exactly one .dmg asset on the release.
 DMG_NAME="$(gh release view "$TAG" --repo fujibee/agmsg --json assets \
   --jq '[.assets[].name | select(endswith(".dmg"))] | .[]')"
@@ -49,10 +59,10 @@ DMG_NAME="$(gh release view "$TAG" --repo fujibee/agmsg --json assets \
 [ "$(printf '%s\n' "$DMG_NAME" | wc -l)" -eq 1 ] \
   || die "multiple .dmg assets on release $TAG — can't pick one:
 $DMG_NAME"
-case "$DMG_NAME" in
-  *"$VERSION"*) ;;
-  *) die "asset '$DMG_NAME' does not contain version '$VERSION' — wrong release?" ;;
-esac
+# Exactly one occurrence of the version string in the asset name, or the
+# #{version} interpolation below would corrupt the url template.
+occ="$(printf '%s' "$DMG_NAME" | grep -o "$VERSION" | wc -l | tr -d ' ')"
+[ "$occ" -eq 1 ] || die "asset '$DMG_NAME' contains version '$VERSION' $occ time(s) (need exactly 1)"
 
 # 2. Download + hash.
 echo "==> Downloading $DMG_NAME from $TAG"
@@ -74,10 +84,15 @@ sed -i '' \
   -e "s|^  version \".*\"$|  version \"$VERSION\"|" \
   -e "s|^  sha256 \".*\"$|  sha256 \"$SHA\"|" \
   -e "s|^  url \".*\"$|  url \"$URL\"|" \
+  -e "s|^  app \".*\"$|  app \"$APP_BUNDLE\"|" \
   "$CASK"
 
-grep -q "version \"$VERSION\"" "$CASK" || die "version rewrite failed — cask format changed?"
-grep -q "sha256 \"$SHA\"" "$CASK" || die "sha256 rewrite failed — cask format changed?"
+# Every rewritten line gets a post-edit guard — a cask format drift must
+# fail here, never half-update and push.
+grep -Fq "version \"$VERSION\"" "$CASK" || die "version rewrite failed — cask format changed?"
+grep -Fq "sha256 \"$SHA\"" "$CASK" || die "sha256 rewrite failed — cask format changed?"
+grep -Fq "url \"$URL\"" "$CASK" || die "url rewrite failed — cask format changed?"
+grep -Fq "app \"$APP_BUNDLE\"" "$CASK" || die "app stanza rewrite failed — cask format changed?"
 
 # 4. Commit + push (no-op safe: bail politely if nothing changed).
 if git -C "$TMP/tap" diff --quiet; then
