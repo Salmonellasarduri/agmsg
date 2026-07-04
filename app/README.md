@@ -133,9 +133,14 @@ gh release create app-vX.Y.Z --repo fujibee/agmsg --title "agmsg app vX.Y.Z" \
 gh release upload app-latest --repo fujibee/agmsg --clobber \
   <same artifacts> latest.json
 ```
-Once artifacts are up, fill in the Homebrew cask
-(`fujibee/homebrew-agmsg`, `Casks/agmsg.rb`) with the release's
-`version`/`sha256`/`url` — it's a TODO placeholder until the first release ships.
+Once artifacts are up, update the Homebrew cask (`fujibee/homebrew-agmsg`):
+```sh
+scripts/release/update-cask.sh X.Y.Z   # finds the .dmg on the release,
+                                       # computes sha256, rewrites Casks/agmsg.rb,
+                                       # commits and pushes the tap
+```
+Run it only after the release assets are uploaded — the cask's `url` must
+resolve as soon as the tap commit lands.
 
 ## Known gaps
 
