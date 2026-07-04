@@ -218,6 +218,9 @@ jobs:
   # Same always-report pattern as bats: the job always completes, and only
   # the heavy steps are gated, so it can be promoted to a required check
   # without ever leaving a PR stuck pending. Pushes to main always run it.
+  # Fail-open mirrors bats too: steps skip only on an EXPLICIT
+  # app_changed=false — if the changes job breaks and its output is empty,
+  # the typecheck runs rather than green-washing a possibly-app diff.
   app-check:
     name: app typecheck
     needs: changes
@@ -234,37 +237,37 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: No app changes — skipping typecheck
-        if: needs.changes.outputs.app_changed != 'true'
+        if: needs.changes.outputs.app_changed == 'false'
         run: echo "Diff does not touch app/ — reporting green without running the typecheck."
 
       - uses: pnpm/action-setup@v4
-        if: needs.changes.outputs.app_changed == 'true'
+        if: needs.changes.outputs.app_changed != 'false'
         with:
           version: 10
 
       - uses: actions/setup-node@v4
-        if: needs.changes.outputs.app_changed == 'true'
+        if: needs.changes.outputs.app_changed != 'false'
         with:
           node-version: 20
           cache: pnpm
           cache-dependency-path: app/pnpm-lock.yaml
 
       - uses: dtolnay/rust-toolchain@stable
-        if: needs.changes.outputs.app_changed == 'true'
+        if: needs.changes.outputs.app_changed != 'false'
 
       - uses: Swatinem/rust-cache@v2
-        if: needs.changes.outputs.app_changed == 'true'
+        if: needs.changes.outputs.app_changed != 'false'
         with:
           workspaces: app/src-tauri
 
       - name: Install frontend deps
-        if: needs.changes.outputs.app_changed == 'true'
+        if: needs.changes.outputs.app_changed != 'false'
         run: pnpm install --frozen-lockfile
 
       - name: TypeScript typecheck
-        if: needs.changes.outputs.app_changed == 'true'
+        if: needs.changes.outputs.app_changed != 'false'
         run: pnpm exec tsc --noEmit
 
       - name: Rust check
-        if: needs.changes.outputs.app_changed == 'true'
+        if: needs.changes.outputs.app_changed != 'false'
         run: cargo check --manifest-path src-tauri/Cargo.toml
