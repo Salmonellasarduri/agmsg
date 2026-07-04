@@ -18,16 +18,27 @@ fn agmsg_base() -> PathBuf {
     PathBuf::from(home).join(".agents/skills/agmsg")
 }
 
-/// Matches agmsg-core's own scripts/lib/storage.sh convention (`cygpath -m`:
-/// drive-letter form with forward slashes, e.g. "C:/Users/name/..."). A
-/// standalone string transform (rather than inline in bash_path below) so
+/// Converts to the full POSIX form Git Bash/MSYS resolve internally
+/// ("C:/Users/name" -> "/c/Users/name"), matching `cygpath -u` — one step
+/// further than agmsg-core's own scripts/lib/storage.sh convention
+/// (`cygpath -m`'s mixed "C:/Users/..." form). Belt-and-suspenders: the
+/// actual bug this was written for turned out to be resolve_bash() picking
+/// up the wrong bash.exe entirely (see there), not the path format, but a
+/// real Git Bash accepts both forms and going all the way removes any doubt.
+/// A standalone string transform (rather than inline in bash_path below) so
 /// it's testable on any host platform, not just Windows — its only
 /// non-test caller is behind a Windows-only cfg, hence the dead_code
 /// allowance on other platforms.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn to_bash_slashes(s: &str) -> String {
     let s = s.strip_prefix(r"\\?\").unwrap_or(s);
-    s.replace('\\', "/")
+    let s = s.replace('\\', "/");
+    let bytes = s.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        format!("/{}{}", (bytes[0] as char).to_ascii_lowercase(), &s[2..])
+    } else {
+        s
+    }
 }
 
 /// Converts a native path into a form Git Bash on Windows accepts as an
@@ -48,6 +59,54 @@ fn bash_path(p: &std::path::Path) -> String {
 #[cfg(not(target_os = "windows"))]
 fn bash_path(p: &std::path::Path) -> String {
     p.to_string_lossy().into_owned()
+}
+
+/// Resolves the actual Git Bash executable rather than trusting PATH to
+/// hand back Git Bash for a bare "bash" — Windows 11 ships a WSL bash.exe
+/// stub at %LOCALAPPDATA%\Microsoft\WindowsApps\bash.exe that PATH lookup
+/// can resolve to ahead of Git Bash, and WSL's bash resolves Windows paths
+/// completely differently ("C:/Users/..." doesn't exist there, only
+/// "/mnt/c/Users/..."), so every bash invocation failed with a spurious "No
+/// such file or directory" despite the target genuinely existing and being
+/// runnable via Git Bash's own file association — confirmed on real Windows
+/// hardware. Resolution order: an env var override, then deriving from
+/// `where git`'s own install root, then the two standard install locations.
+#[cfg(target_os = "windows")]
+fn resolve_bash() -> Result<PathBuf, String> {
+    if let Ok(over) = std::env::var("AGMSG_APP_BASH") {
+        if !over.is_empty() && PathBuf::from(&over).is_file() {
+            return Ok(PathBuf::from(over));
+        }
+    }
+
+    if let Ok(output) = std::process::Command::new("where").arg("git").output() {
+        if output.status.success() {
+            if let Some(first_line) = String::from_utf8_lossy(&output.stdout).lines().next() {
+                // git.exe sits at <root>\cmd\git.exe or <root>\bin\git.exe;
+                // bash.exe is always at <root>\bin\bash.exe either way.
+                if let Some(root) = PathBuf::from(first_line.trim()).parent().and_then(|p| p.parent()) {
+                    let candidate = root.join("bin").join("bash.exe");
+                    if candidate.is_file() {
+                        return Ok(candidate);
+                    }
+                }
+            }
+        }
+    }
+
+    for candidate in [r"C:\Program Files\Git\bin\bash.exe", r"C:\Program Files (x86)\Git\bin\bash.exe"] {
+        let p = PathBuf::from(candidate);
+        if p.is_file() {
+            return Ok(p);
+        }
+    }
+
+    Err("Git for Windows (Git Bash) wasn't found. Install it from https://git-scm.com/download/win, then restart the app.".into())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn resolve_bash() -> Result<PathBuf, String> {
+    Ok(PathBuf::from("bash"))
 }
 
 fn db_path() -> PathBuf {
@@ -273,7 +332,7 @@ pub fn agmsg_install(app: AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())?
         .join("agmsg-core")
         .join("install.sh");
-    let output = std::process::Command::new("bash")
+    let output = std::process::Command::new(resolve_bash()?)
         .arg(bash_path(&install_sh))
         .output()
         .map_err(|e| e.to_string())?;
@@ -356,7 +415,7 @@ pub fn agmsg_update_core(app: AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())?
         .join("agmsg-core")
         .join("install.sh");
-    let output = std::process::Command::new("bash")
+    let output = std::process::Command::new(resolve_bash()?)
         .arg(bash_path(&install_sh))
         .args(["--cmd", "agmsg", "--update"])
         .output()
@@ -438,7 +497,7 @@ pub fn agmsg_messages(
 /// itself. Returns stdout on success, stderr on failure.
 fn run_script(name: &str, args: &[&str]) -> Result<String, String> {
     let script = agmsg_base().join("scripts").join(name);
-    let output = std::process::Command::new("bash")
+    let output = std::process::Command::new(resolve_bash()?)
         .arg(bash_path(&script))
         .args(args)
         .output()
@@ -579,23 +638,23 @@ mod tests {
     use super::{parse_semver, to_bash_slashes};
 
     #[test]
-    fn strips_verbatim_prefix_and_flips_slashes() {
+    fn strips_verbatim_prefix_and_converts_to_posix() {
         // The exact shape resource_dir()/canonicalize() produced on the
         // Windows hardware where this was found.
         assert_eq!(
             to_bash_slashes(r"\\?\C:\Users\koichi\AppData\Local\agmsg\agmsg-core\install.sh"),
-            "C:/Users/koichi/AppData/Local/agmsg/agmsg-core/install.sh",
+            "/c/Users/koichi/AppData/Local/agmsg/agmsg-core/install.sh",
         );
     }
 
     #[test]
-    fn flips_slashes_in_mixed_paths() {
+    fn converts_mixed_slash_paths_to_posix() {
         // agmsg_base() joins a literal ".agents/skills/agmsg" (forward
         // slashes) onto a platform-joined home dir (backslashes on
         // Windows) — the real path run_script() builds is a mix of both.
         assert_eq!(
             to_bash_slashes(r"C:\Users\koichi\.agents/skills/agmsg\scripts\join.sh"),
-            "C:/Users/koichi/.agents/skills/agmsg/scripts/join.sh",
+            "/c/Users/koichi/.agents/skills/agmsg/scripts/join.sh",
         );
     }
 
@@ -606,13 +665,18 @@ mod tests {
     }
 
     #[test]
-    fn flips_slashes_in_a_project_dir_argument() {
+    fn converts_a_project_dir_argument_to_posix() {
         // Not just the script path — join.sh's $4 and delivery.sh's $3 are
         // project directories that cross the same bash argv boundary.
         assert_eq!(
             to_bash_slashes(r"C:\Users\koichi\agmsg-agents\alice"),
-            "C:/Users/koichi/agmsg-agents/alice",
+            "/c/Users/koichi/agmsg-agents/alice",
         );
+    }
+
+    #[test]
+    fn lowercases_the_drive_letter() {
+        assert_eq!(to_bash_slashes(r"D:\work\x.sh"), "/d/work/x.sh");
     }
 
     #[test]
