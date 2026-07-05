@@ -361,6 +361,20 @@ if [ -n "$PROMPT" ]; then
 ${PROMPT}"
 fi
 
+# Git Bash / MSYS path conversion rewrites exec args that look like absolute
+# POSIX paths when invoking a native Windows binary: a '/<cmd> actas <name>'
+# initial prompt reaches the CLI as 'C:/Program Files/Git/<cmd> actas <name>'
+# and the agent never sees a valid skill invocation. Exclude args starting
+# with the slash command from conversion. The exclusion is prefix-scoped on
+# purpose — MSYS_NO_PATHCONV=1 would also stop converting genuine POSIX-path
+# args (e.g. a node launcher's --project /e/...) that native CLIs rely on.
+# Only the '/' prefix is path-shaped; '$'-prefixed prompts (#283) are never
+# converted, and the variable is inert outside MSYS environments.
+MSYS_GUARD=""
+if [ "$CMD_PREFIX" = "/" ]; then
+  MSYS_GUARD="MSYS2_ARG_CONV_EXCL=/${CMD_NAME} "
+fi
+
 BOOT_DIR="${TMPDIR:-/tmp}/agmsg-spawn"
 mkdir -p "$BOOT_DIR" 2>/dev/null || true
 # Best-effort GC of boot scripts left behind by spawns whose window was closed
@@ -388,7 +402,7 @@ esac
     # Type-specific config is the launcher's own default/env, so core stays
     # generic and names no add-on. Spawn-options tokens (if any) land before
     # --initial-input, same relative position as the direct-CLI path below.
-    printf '%q %q \\\n' "$NODE_BIN" "$SPAWN_AGENT"
+    printf '%s%q %q \\\n' "$MSYS_GUARD" "$NODE_BIN" "$SPAWN_AGENT"
     printf '  --name %q \\\n' "$NAME"
     printf '  --team %q \\\n' "$TEAM"
     printf '  --project %q \\\n' "$PROJECT"
@@ -405,7 +419,7 @@ esac
     # flags like --model or -i); the model id, every spawn-options token, and the
     # actas prompt are quoted. prompt_arg (when set) lands immediately before the
     # prompt so there is no ambiguity about which token is its value.
-    printf '%s' "$CLI_BIN"
+    printf '%s%s' "$MSYS_GUARD" "$CLI_BIN"
     [ -n "$MODEL_ID" ] && printf ' %s %q' "$MODEL_ARG" "$MODEL_ID"
     for _tok in ${SPAWN_OPT_TOKENS[@]+"${SPAWN_OPT_TOKENS[@]}"}; do
       printf ' %q' "$_tok"
