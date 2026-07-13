@@ -2,7 +2,6 @@
 import "../styles/global.css";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { defaultLang, languages, localizedPath, useTranslations } from "../i18n/utils.js";
 
 interface Props {
@@ -12,7 +11,11 @@ const { lang } = Astro.props;
 const t = useTranslations(lang);
 
 // --- Agent Types gallery: data-driven from scripts/drivers/types/*/type.conf ---
-const typesDir = fileURLToPath(new URL("../../../scripts/drivers/types", import.meta.url));
+const cwd = process.cwd();
+const repoRoot = fs.existsSync(path.join(cwd, "scripts", "drivers", "types"))
+  ? cwd
+  : path.resolve(cwd, "..");
+const typesDir = path.join(repoRoot, "scripts", "drivers", "types");
 
 function parseConf(file) {
   const out = {};
